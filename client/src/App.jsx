@@ -1,10 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const SUPA_URL  = "https://dqsriohrazmlikwjwbot.supabase.co";
-const SUPA_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRxc3Jpb2hyYXptbGlrd2p3Ym90Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0OTAwNDgsImV4cCI6MjA4NjA2NjA0OH0.PMT_TgFaie6ntF0g0NXyxhgfPSCX_W3tvxm7jVXVnVQ";
+// Environment variables are loaded from Vercel for security
+const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL || "https://dqsriohrazmlikwjwbot.supabase.co";
+const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY || "";
 // ─── EDGE FUNCTION PROXY — API keys live in Supabase secrets, never in browser
 const AI_PROXY_URL = `${SUPA_URL}/functions/v1/ai-proxy`;
+
+// Validate that required environment variables are set
+if (!SUPA_URL || !SUPA_KEY) {
+  console.warn("⚠️ Supabase credentials not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_KEY environment variables.");
+}
 
 // ─── SUPABASE CLIENT ───────────────────────────────────────────────────────
 const supa = {
