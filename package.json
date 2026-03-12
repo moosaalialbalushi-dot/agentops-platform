@@ -6,12 +6,11 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-
     "preview": "vite preview --host",
     "check": "tsc --noEmit",
     "format": "prettier --write ."
   },
-  ""@supabase/supabase-js": "^2.39.7",dependencies": {
+  "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
@@ -39,6 +38,7 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "@supabase/supabase-js": "^2.39.7",
     "axios": "^1.12.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
