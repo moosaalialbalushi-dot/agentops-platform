@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL || "https://dqsriohrazmlikwjwbot.supabase.co";
 const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY || "";
 // ─── EDGE FUNCTION PROXY — API keys live in Supabase secrets, never in browser
-const AI_PROXY_URL = `${SUPA_URL}/functions/v1/ai-proxy`;
+const AI_PROXY_URL = "/api/chat";
 
 // Validate that required environment variables are set
 if (!SUPA_URL || !SUPA_KEY) {
