@@ -39,15 +39,41 @@ const supa = {
 };
 
 // ─── MULTI-AI ROUTER ───────────────────────────────────────────────────────
-async function routeToAI(agent, userMessage) {
+// history: array of past {role:"user"|"agent", text} messages (excludes current userMessage)
+// agentSkills: array of skill objects attached to this agent
+async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
+  // Build system prompt: agent's own prompt + skills context + general fallback
+  let systemPrompt = agent.system_prompt || "You are a helpful AI agent.";
+
+  // Append active skills as context if any are attached
+  const activeSkills = agentSkills.filter(s => s.is_active !== false);
+  if (activeSkills.length > 0) {
+    const skillsContext = activeSkills.map(s =>
+      `- ${s.name} (${s.identifier}): ${s.description || "No description"}`
+    ).join("\n");
+    systemPrompt += `\n\n## Available Skills\nYou have access to the following capabilities:\n${skillsContext}`;
+  }
+
+  // Always add general-purpose fallback so the agent never refuses off-topic questions
+  systemPrompt += `\n\n## General Assistant Behavior\nYou are also a general-purpose AI assistant. If a user's question is outside your primary specialty or cannot be addressed by your defined skills, still respond helpfully using your broad knowledge. Never refuse to help just because a topic seems off-topic. If you lack a specific skill to complete a task, explain what you can do and suggest alternatives or ask the user for more context.`;
+
+  // Build full conversation history for multi-turn chat
+  const messages = [
+    ...history
+      .filter(m => m.role === "user" || m.role === "agent")
+      .map(m => ({ role: m.role === "agent" ? "assistant" : "user", content: m.text })),
+    { role: "user", content: userMessage },
+  ];
+
   const r = await fetch(AI_PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       provider: agent.primary_provider,
       model: agent.primary_model,
-      system_prompt: agent.system_prompt || "You are a helpful AI agent.",
-      message: userMessage,
+      system_prompt: systemPrompt,
+      messages,           // full conversation history
+      message: userMessage, // kept for backwards compat
       max_tokens: agent.max_tokens || 1000,
       temperature: agent.temperature || 0.7,
       fallback_provider: agent.fallback_provider || null,
@@ -526,7 +552,7 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
                 <div className="metric-row">
                   <div className="metric-box"><div className="m-val" style={{ color:p.color }}>{(agent.total_runs||0).toLocaleString()}</div><div className="m-lbl">RUNS</div></div>
                   <div className="metric-box"><div className="m-val" style={{ color:C.cyan }}>{fmt(agent.total_tokens||0)}</div><div className="m-lbl">TOKENS</div></div>
-                  <div className="metric-box"><div className="m-val" style={{ color:C.muted, fontSize:9 }}>{agent.primary_model?.split("-")[1]||"—"}</div><div className="m-lbl">MODEL</div></div>
+                  <div className="metric-box"><div className="m-val" style={{ color:C.purple }}>{Array.isArray(agent.skill_ids)?agent.skill_ids.length:0}</div><div className="m-lbl">SKILLS</div></div>
                 </div>
               </div>
             );
@@ -534,7 +560,7 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
         </div>
       )}
 
-      {modal && <AgentModal modal={modal} onSave={save} onClose={() => setModal(null)} saving={saving} />}
+      {modal && <AgentModal modal={modal} onSave={save} onClose={() => setModal(null)} saving={saving} skills={skills} />}
       {del && (
         <Modal title="Decommission Agent" onClose={() => setDel(null)}>
           <p style={{ color:C.muted, marginBottom:18 }}>Remove agent <span style={{ color:C.red }}>{del.name}</span>? This cannot be undone.</p>
@@ -548,10 +574,17 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
   );
 }
 
-function AgentModal({ modal, onSave, onClose, saving }) {
-  const [d, setD] = useState(modal.data);
+function AgentModal({ modal, onSave, onClose, saving, skills = [] }) {
+  const [d, setD] = useState({ ...modal.data, skill_ids: modal.data.skill_ids || [] });
   const [chain, setChain] = useState(modal.data.provider_chain || [modal.data.primary_provider || "claude", modal.data.fallback_provider].filter(Boolean));
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+
+  const toggleSkill = (skillId) => {
+    setD(p => {
+      const ids = Array.isArray(p.skill_ids) ? p.skill_ids : [];
+      return { ...p, skill_ids: ids.includes(skillId) ? ids.filter(x => x !== skillId) : [...ids, skillId] };
+    });
+  };
 
   const moveUp = (i) => { if (i===0) return; const c=[...chain]; [c[i-1],c[i]]=[c[i],c[i-1]]; setChain(c); updateChain(c); };
   const moveDown = (i) => { if (i===chain.length-1) return; const c=[...chain]; [c[i],c[i+1]]=[c[i+1],c[i]]; setChain(c); updateChain(c); };
@@ -639,6 +672,37 @@ function AgentModal({ modal, onSave, onClose, saving }) {
           <input className="form-input" type="number" min="100" max="128000" step="100" value={d.max_tokens||4096} onChange={e=>set("max_tokens",parseInt(e.target.value))} />
         </div>
       </div>
+
+      {/* Skills Assignment */}
+      {skills.length > 0 && (
+        <div className="provider-routing" style={{ marginTop:13 }}>
+          <div className="routing-title">◈ Assign Skills — select capabilities this agent can use</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {skills.map(skill => {
+              const cc = CAT_COLORS[skill.category] || CAT_COLORS.general;
+              const selected = (Array.isArray(d.skill_ids) ? d.skill_ids : []).includes(skill.id);
+              return (
+                <button key={skill.id} onClick={() => toggleSkill(skill.id)}
+                  className="btn btn-xs"
+                  style={{
+                    background: selected ? cc+"22" : "transparent",
+                    color: selected ? cc : C.muted,
+                    border: `1px solid ${selected ? cc : C.border}`,
+                    opacity: skill.is_active === false ? 0.45 : 1,
+                  }}
+                  title={skill.description || skill.identifier}>
+                  {selected ? "✓ " : ""}{skill.name}
+                </button>
+              );
+            })}
+          </div>
+          {(Array.isArray(d.skill_ids) ? d.skill_ids : []).length > 0 && (
+            <div style={{ fontSize:10, color:C.muted, marginTop:7 }}>
+              {(Array.isArray(d.skill_ids) ? d.skill_ids : []).length} skill{(Array.isArray(d.skill_ids) ? d.skill_ids : []).length !== 1 ? "s" : ""} assigned — these will be included in the agent's context during chat
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:16 }}>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
@@ -891,14 +955,17 @@ function SkillForm({ data, onSave, onClose, saving }) {
 }
 
 // ─── CHAT PAGE ─────────────────────────────────────────────────────────────
-function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
+function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const msgsRef = useRef([]);
 
-  // ALL HOOKS MUST BE BEFORE ANY CONDITIONAL RETURNS
+  // Keep msgsRef in sync so send() always has latest history
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:"smooth" });
   }, [msgs]);
@@ -911,11 +978,15 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
   const send = useCallback(async () => {
     if (!input.trim() || !agent || loading) return;
     const userMsg = input.trim();
+    const history = msgsRef.current; // capture history before state update
     setInput("");
     setMsgs(m => [...m, { role:"user", text:userMsg, ts:new Date() }]);
     setLoading(true);
     try {
-      const result = await routeToAI(agent, userMsg);
+      // Resolve skills attached to this agent
+      const agentSkillIds = Array.isArray(agent.skill_ids) ? agent.skill_ids : [];
+      const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
+      const result = await routeToAI(agent, userMsg, history, agentSkills);
       setMsgs(m => [...m, {
         role:"agent", text:result.response, ts:new Date(),
         meta:`${result.provider_used} · ${result.model_used} · ${result.tokens_used}tok · ${result.latency_ms}ms${result.fallback_triggered?" · FALLBACK":""}`
@@ -926,7 +997,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
     } catch(e) {
       setMsgs(m => [...m, { role:"agent", text:`⚠ Error: ${e.message}\n\nCheck your API keys in Settings.`, meta:"error", ts:new Date() }]);
     } finally { setLoading(false); }
-  }, [input, agent, loading, setAgents]);
+  }, [input, agent, loading, setAgents, skills]);
 
   // CONDITIONAL RENDER AFTER ALL HOOKS
   if (!agent) {
@@ -1351,6 +1422,7 @@ export default function App() {
               agents={agents}
               onSelectAgent={a=>{ setChatAgent(a); }}
               setAgents={setAgents}
+              skills={skills}
             />
           )}
         </div>
