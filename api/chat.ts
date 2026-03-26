@@ -161,16 +161,79 @@ async function callGroq({ model, system_prompt, messages, max_tokens, temperatur
   });
 }
 
+// ─── NotebookLM — powered by Gemini 2.5 Pro with specialized prompts ────────
+
+const NOTEBOOKLM_PROMPTS: Record<string, string> = {
+  "notebooklm-research":
+    "You are NotebookLM, a research assistant specialized in deep document analysis, source synthesis, and evidence-based reasoning. Extract key insights, identify connections between ideas, and produce well-cited summaries with clear headings.",
+  "notebooklm-slides":
+    "You are NotebookLM in Slides mode. Convert content into a Markdown slide deck. Use '---' between slides. Each slide: ## Title, 3-5 bullets, and 'Notes: ...' for speaker notes.",
+  "notebooklm-summary":
+    "You are NotebookLM in Summary mode. Produce a structured summary with: Executive Summary, Key Concepts, Important Details, and Takeaways sections.",
+  "notebooklm-qa":
+    "You are NotebookLM in Q&A mode. Generate 5-8 insightful Q&A pairs covering the most important aspects. Format: **Q: ...** / **A: ...**",
+  "notebooklm-podcast":
+    "You are NotebookLM in Audio Overview mode. Write a conversational podcast script (Host A / Host B) that explains the content in an engaging, accessible way.",
+};
+
+async function callNotebookLM(params: ProviderParams) {
+  const nlmPrompt = NOTEBOOKLM_PROMPTS[params.model || "notebooklm-research"]
+    || NOTEBOOKLM_PROMPTS["notebooklm-research"];
+  const merged = {
+    ...params,
+    model: "gemini-2.5-pro-preview-05-06",
+    system_prompt: `${nlmPrompt}\n\n${params.system_prompt || ""}`.trim(),
+    temperature: 0.4,
+  };
+  return callGemini(merged);
+}
+
+// ─── Imagen — Google image generation via Gemini API key ─────────────────────
+
+async function callImagen(params: ProviderParams) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set (required for Imagen)");
+
+  const model = params.model || "imagen-3.0-generate-002";
+  const prompt = params.messages[params.messages.length - 1]?.content || "";
+  const start = Date.now();
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1 },
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `Imagen error ${res.status}`);
+
+  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+  const mime = data.predictions?.[0]?.mimeType || "image/png";
+  const dataUrl = b64 ? `data:${mime};base64,${b64}` : "";
+
+  return {
+    response: dataUrl,
+    tokens_used: 0,
+    latency_ms: Date.now() - start,
+    is_image: true,
+  };
+}
+
 // ─── Provider Router ─────────────────────────────────────────────────────────
 
 async function callProvider(provider: string, params: ProviderParams) {
   switch (provider?.toLowerCase()) {
-    case "claude":    return callClaude(params);
-    case "gemini":    return callGemini(params);
-    case "openai":    return callOpenAI(params);
-    case "deepseek":  return callDeepSeek(params);
-    case "groq":      return callGroq(params);
-    default:          throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq`);
+    case "claude":      return callClaude(params);
+    case "gemini":      return callGemini(params);
+    case "openai":      return callOpenAI(params);
+    case "deepseek":    return callDeepSeek(params);
+    case "groq":        return callGroq(params);
+    case "notebooklm":  return callNotebookLM(params);
+    case "imagen":      return callImagen(params);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, notebooklm, imagen`);
   }
 }
 

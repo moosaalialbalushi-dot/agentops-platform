@@ -117,25 +117,73 @@ const PERSONAS = {
 };
 
 const PROVIDERS = {
-  claude:    { label: "Claude",    color: "#d97706", logo: "◆" },
-  gemini:    { label: "Gemini",    color: "#4285f4", logo: "✦" },
-  deepseek:  { label: "DeepSeek", color: "#10b981", logo: "◉" },
-  openai:    { label: "OpenAI",   color: "#74aa9c", logo: "⊕" },
-  mistral:   { label: "Mistral",  color: "#ff7000", logo: "◐" },
-  cohere:    { label: "Cohere",   color: "#39594d", logo: "◑" },
-  groq:      { label: "Groq",     color: "#f55036", logo: "◧" },
-  custom:    { label: "Custom",   color: "#8b5cf6", logo: "✳" },
+  claude:      { label: "Claude",      color: "#d97706", logo: "◆" },
+  gemini:      { label: "Gemini",      color: "#4285f4", logo: "✦" },
+  deepseek:    { label: "DeepSeek",    color: "#10b981", logo: "◉" },
+  openai:      { label: "OpenAI",      color: "#74aa9c", logo: "⊕" },
+  mistral:     { label: "Mistral",     color: "#ff7000", logo: "◐" },
+  cohere:      { label: "Cohere",      color: "#39594d", logo: "◑" },
+  groq:        { label: "Groq",        color: "#f55036", logo: "◧" },
+  notebooklm:  { label: "NotebookLM",  color: "#1a73e8", logo: "⊞" },
+  imagen:      { label: "Imagen",      color: "#34a853", logo: "⬡" },
+  custom:      { label: "Custom",      color: "#8b5cf6", logo: "✳" },
 };
 
 const MODELS_BY_PROVIDER = {
-  claude:   ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-  gemini:   ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-pro"],
-  deepseek: ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
-  openai:   ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1", "o1-mini"],
-  mistral:  ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"],
-  cohere:   ["command-r-plus", "command-r", "command"],
-  groq:     ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-  custom:   ["custom-model"],
+  claude:     [
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-opus-20240229",
+  ],
+  gemini:     [
+    "gemini-2.5-pro-preview-05-06",
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-flash-002",
+  ],
+  deepseek:   ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+  openai:     [
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o3",
+    "o3-mini",
+    "o1",
+    "o1-mini",
+  ],
+  mistral:    [
+    "mistral-large-latest",
+    "mistral-small-latest",
+    "codestral-latest",
+    "pixtral-large-latest",
+  ],
+  cohere:     ["command-a-03-2025", "command-r-plus", "command-r"],
+  groq:       [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "qwen-qwq-32b",
+    "mixtral-8x7b-32768",
+  ],
+  notebooklm: [
+    "notebooklm-research",
+    "notebooklm-slides",
+    "notebooklm-summary",
+    "notebooklm-qa",
+    "notebooklm-podcast",
+  ],
+  imagen:     [
+    "imagen-3.0-generate-002",
+    "imagen-3.0-fast-generate-001",
+  ],
+  custom:     ["custom-model"],
 };
 
 const CAT_COLORS = {
@@ -279,7 +327,15 @@ select.form-input option{background:${C.card}}
 .order-controls{display:flex;flex-direction:column;gap:3px}
 .order-btn{background:none;border:1px solid ${C.border};border-radius:4px;color:${C.dim};cursor:pointer;padding:2px 6px;font-size:10px;line-height:1;transition:all .14s}
 .order-btn:hover{color:${C.text};border-color:${C.borderHi}}
+.pipeline-card{align-self:flex-start;background:${C.card};border:1px solid rgba(167,139,250,.25);border-left:3px solid ${C.purple};border-radius:10px;padding:13px 15px;max-width:88%;width:100%}
+.pipeline-header{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:11px;color:${C.text}}
+.pipeline-step{background:${C.surface};border:1px solid ${C.border};border-radius:7px;padding:10px 12px;margin-bottom:8px}
+.pipeline-step:last-child{margin-bottom:0}
+.pipeline-step-error{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.04)}
+.pipeline-step-label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:${C.text};margin-bottom:7px}
+.pipeline-step-output{font-size:12px;color:${C.text};line-height:1.7;white-space:pre-wrap;max-height:320px;overflow-y:auto}
 `;
+
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(0)+"k" : String(n||0);
@@ -728,6 +784,7 @@ function SkillsPage({ skills, setSkills, loading }) {
   const blankSkill = {
     name:"", identifier:"", category:"retrieval", version:"1.0.0",
     description:"", permissions:"read", rate_limit:100, is_active:true, parameters:{}, tags:[],
+    output_type:"text", pipeline_steps:[],
   };
 
   const saveSkill = async (d) => {
@@ -897,9 +954,28 @@ function SkillsPage({ skills, setSkills, loading }) {
   );
 }
 
+const OUTPUT_TYPES = ["text", "image", "presentation", "code", "analysis", "pipeline"];
+
 function SkillForm({ data, onSave, onClose, saving }) {
-  const [d, setD] = useState(data);
+  const [d, setD] = useState({ output_type:"text", pipeline_steps:[], ...data });
   const set = (k,v) => setD(p=>({...p,[k]:v}));
+
+  const addStep = () => setD(p => ({
+    ...p, pipeline_steps: [...(p.pipeline_steps||[]), {
+      label: `Step ${(p.pipeline_steps||[]).length + 1}`,
+      provider: "claude",
+      model: "claude-sonnet-4-6",
+      prompt_template: "{{input}}",
+      system_prompt: "You are a helpful AI assistant.",
+      max_tokens: 2048,
+    }]
+  }));
+  const removeStep = (i) => setD(p => ({ ...p, pipeline_steps: p.pipeline_steps.filter((_,idx)=>idx!==i) }));
+  const setStep = (i, k, v) => setD(p => ({
+    ...p,
+    pipeline_steps: p.pipeline_steps.map((s, idx) => idx===i ? {...s,[k]:v} : s)
+  }));
+
   return (
     <>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -922,6 +998,12 @@ function SkillForm({ data, onSave, onClose, saving }) {
           </select>
         </div>
         <div className="form-group">
+          <label className="form-label">Output Type</label>
+          <select className="form-input" value={d.output_type||"text"} onChange={e=>set("output_type",e.target.value)}>
+            {OUTPUT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
           <label className="form-label">Permissions</label>
           <select className="form-input" value={d.permissions||"read"} onChange={e=>set("permissions",e.target.value)}>
             {["read","write","execute","admin"].map(p=><option key={p} value={p}>{p}</option>)}
@@ -931,15 +1013,79 @@ function SkillForm({ data, onSave, onClose, saving }) {
           <label className="form-label">Rate Limit (req/min)</label>
           <input className="form-input" type="number" value={d.rate_limit||100} onChange={e=>set("rate_limit",parseInt(e.target.value))} />
         </div>
-        <div className="form-group">
+        <div className="form-group" style={{ gridColumn:"span 2" }}>
           <label className="form-label">Tags (comma separated)</label>
           <input className="form-input" value={(d.tags||[]).join(",")} onChange={e=>set("tags",e.target.value.split(",").map(t=>t.trim()).filter(Boolean))} placeholder="search, nlp, vectors" />
         </div>
       </div>
       <div className="form-group">
-        <label className="form-label">Description</label>
-        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do? Include input/output format, use cases..." rows={4} />
+        <label className="form-label">Description / Single-step Prompt</label>
+        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do? For single-step skills this is the base prompt sent to the AI." rows={3} />
       </div>
+
+      {/* Pipeline Steps Editor */}
+      <div className="provider-routing">
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:11 }}>
+          <div className="routing-title" style={{ marginBottom:0 }}>⬡ Pipeline Steps — chain multiple AI providers</div>
+          <button className="btn btn-xs btn-ghost" onClick={addStep}>⊕ Add Step</button>
+        </div>
+        {(d.pipeline_steps||[]).length === 0 ? (
+          <div style={{ fontSize:11, color:C.dim, textAlign:"center", padding:"10px 0" }}>
+            No pipeline steps — skill runs as a single-step using the description above.
+            {" "}<span style={{ color:C.accent, cursor:"pointer" }} onClick={addStep}>Add a step →</span>
+          </div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {(d.pipeline_steps||[]).map((step, i) => {
+              const pp = PROVIDERS[step.provider] || { color:C.muted, logo:"?" };
+              return (
+                <div key={i} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"11px 13px" }}>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:9 }}>
+                    <span style={{ color:pp.color, fontSize:13 }}>{pp.logo}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:C.text }}>Step {i+1}</span>
+                    <input className="form-input" value={step.label||""} onChange={e=>setStep(i,"label",e.target.value)}
+                      placeholder="Step label" style={{ flex:1, padding:"3px 8px", fontSize:11 }} />
+                    <button className="icon-btn" style={{ color:C.red, fontSize:11 }} onClick={()=>removeStep(i)}>✕</button>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
+                    <div>
+                      <label className="form-label">Provider</label>
+                      <select className="form-input" style={{ padding:"4px 8px", fontSize:11 }} value={step.provider||"claude"}
+                        onChange={e=>{ setStep(i,"provider",e.target.value); setStep(i,"model",MODELS_BY_PROVIDER[e.target.value]?.[0]||""); }}>
+                        {Object.entries(PROVIDERS).map(([k,p])=><option key={k} value={k}>{p.logo} {p.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label">Model</label>
+                      <select className="form-input" style={{ padding:"4px 8px", fontSize:11 }} value={step.model||""}
+                        onChange={e=>setStep(i,"model",e.target.value)}>
+                        {(MODELS_BY_PROVIDER[step.provider]||["custom"]).map(m=><option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginBottom:8 }}>
+                    <label className="form-label">Prompt Template</label>
+                    <textarea className="form-input" rows={2} value={step.prompt_template||"{{input}}"}
+                      onChange={e=>setStep(i,"prompt_template",e.target.value)}
+                      placeholder="Use {{input}} for original user input, {{prev}} for previous step's output" />
+                  </div>
+                  <div className="form-group" style={{ marginBottom:0 }}>
+                    <label className="form-label">System Prompt (optional)</label>
+                    <input className="form-input" style={{ fontSize:11 }} value={step.system_prompt||""} onChange={e=>setStep(i,"system_prompt",e.target.value)}
+                      placeholder="Override system prompt for this step…" />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {(d.pipeline_steps||[]).length > 0 && (
+          <div style={{ fontSize:10, color:C.muted, marginTop:8 }}>
+            Steps run in sequence. Use <code style={{ color:C.accent }}>{"{{prev}}"}</code> to reference the previous step's output.
+          </div>
+        )}
+      </div>
+
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
         <Toggle on={d.is_active!==false} onChange={() => set("is_active",!d.is_active)} />
         <span style={{ fontSize:12, color:C.muted }}>Skill is {d.is_active!==false?"active":"inactive"}</span>
@@ -975,17 +1121,17 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
     setMsgs([]);
   }, [agent?.id]);
 
+  const agentSkillIds = Array.isArray(agent?.skill_ids) ? agent.skill_ids : [];
+  const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
+
   const send = useCallback(async () => {
     if (!input.trim() || !agent || loading) return;
     const userMsg = input.trim();
-    const history = msgsRef.current; // capture history before state update
+    const history = msgsRef.current;
     setInput("");
     setMsgs(m => [...m, { role:"user", text:userMsg, ts:new Date() }]);
     setLoading(true);
     try {
-      // Resolve skills attached to this agent
-      const agentSkillIds = Array.isArray(agent.skill_ids) ? agent.skill_ids : [];
-      const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
       const result = await routeToAI(agent, userMsg, history, agentSkills);
       setMsgs(m => [...m, {
         role:"agent", text:result.response, ts:new Date(),
@@ -997,7 +1143,45 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
     } catch(e) {
       setMsgs(m => [...m, { role:"agent", text:`⚠ Error: ${e.message}\n\nCheck your API keys in Settings.`, meta:"error", ts:new Date() }]);
     } finally { setLoading(false); }
-  }, [input, agent, loading, setAgents, skills]);
+  }, [input, agent, loading, setAgents, agentSkills]);
+
+  const runSkillPipeline = useCallback(async (skill) => {
+    if (!agent || loading) return;
+    // Use the last user message as input, or prompt user to type something
+    const lastUserMsg = msgsRef.current.filter(m => m.role === "user").slice(-1)[0]?.text || "";
+    if (!lastUserMsg) {
+      setMsgs(m => [...m, { role:"agent", text:`◈ To run "${skill.name}", send a message first — it will be used as the pipeline input.`, meta:"system", ts:new Date() }]);
+      return;
+    }
+    const steps = Array.isArray(skill.pipeline_steps) && skill.pipeline_steps.length > 0
+      ? skill.pipeline_steps
+      : [{ label: skill.name, provider: agent.primary_provider, model: agent.primary_model,
+           prompt_template: `${skill.description || "Process this:"}\n\n{{input}}`,
+           system_prompt: agent.system_prompt }];
+
+    const placeholderIdx = msgsRef.current.length;
+    setMsgs(m => [...m, { role:"pipeline", skill_name:skill.name, steps_output:[], loading:true, ts:new Date() }]);
+    setLoading(true);
+    try {
+      const r = await fetch("/api/pipeline", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `Pipeline error ${r.status}`);
+      setMsgs(m => m.map((msg, i) => i === placeholderIdx
+        ? { ...msg, steps_output: data.steps_output, final_output: data.final_output, is_image: data.is_image, loading: false,
+            meta: `${data.steps_output.length} step${data.steps_output.length!==1?"s":""} · ${data.total_tokens}tok · ${data.total_latency_ms}ms` }
+        : msg
+      ));
+    } catch(e) {
+      setMsgs(m => m.map((msg, i) => i === placeholderIdx
+        ? { ...msg, steps_output:[{ label:"Error", output:`⚠ ${e.message}`, error:true }], loading:false }
+        : msg
+      ));
+    } finally { setLoading(false); }
+  }, [agent, loading, agentSkills]);
 
   // CONDITIONAL RENDER AFTER ALL HOOKS
   if (!agent) {
@@ -1053,10 +1237,34 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
         )}
         {msgs.map((m, i) => (
           <div key={i}>
-            <div className={`msg msg-${m.role}`}>{m.text}</div>
-            {m.meta && (
+            {m.role === "pipeline" ? (
+              <div className="pipeline-card">
+                <div className="pipeline-header">
+                  <span style={{ color:C.purple }}>◈</span>
+                  <span style={{ fontWeight:700 }}>{m.skill_name}</span>
+                  {m.loading && <Spinner />}
+                  {!m.loading && m.meta && <span style={{ color:C.muted, fontSize:10, marginLeft:"auto" }}>{m.meta}</span>}
+                </div>
+                {(m.steps_output||[]).map((step, si) => (
+                  <div key={si} className={`pipeline-step${step.error?" pipeline-step-error":""}`}>
+                    <div className="pipeline-step-label">
+                      <span style={{ color:PROVIDERS[step.provider]?.color||C.muted }}>{PROVIDERS[step.provider]?.logo||"?"}</span>
+                      {step.label}
+                      <span style={{ marginLeft:"auto", fontSize:10, color:C.muted }}>{step.provider} · {step.latency_ms}ms</span>
+                    </div>
+                    {step.is_image
+                      ? <img src={step.output} alt="Generated" style={{ maxWidth:"100%", borderRadius:6, marginTop:6 }} />
+                      : <div className="pipeline-step-output">{step.output}</div>
+                    }
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className={`msg msg-${m.role}`}>{m.text}</div>
+            )}
+            {m.meta && m.role !== "pipeline" && (
               <div className="msg-meta" style={{ justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
-                {m.meta==="error" ? <span style={{ color:C.red }}>error</span> : m.meta}
+                {m.meta==="error"||m.meta==="system" ? <span style={{ color:m.meta==="error"?C.red:C.muted }}>{m.meta==="error"?"error":""}</span> : m.meta}
               </div>
             )}
           </div>
@@ -1068,6 +1276,25 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
         )}
         <div ref={bottomRef} />
       </div>
+
+      {agentSkills.length > 0 && (
+        <div style={{ padding:"7px 18px", borderTop:`1px solid ${C.border}`, display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", background:C.surface }}>
+          <span style={{ fontSize:9, color:C.dim, letterSpacing:".1em", textTransform:"uppercase", marginRight:2 }}>Skills</span>
+          {agentSkills.map(skill => {
+            const cc = CAT_COLORS[skill.category]||C.muted;
+            const hasSteps = Array.isArray(skill.pipeline_steps) && skill.pipeline_steps.length > 0;
+            return (
+              <button key={skill.id} className="btn btn-xs"
+                onClick={() => runSkillPipeline(skill)} disabled={loading}
+                style={{ color:cc, border:`1px solid ${cc}40`, background:`${cc}0d` }}
+                title={skill.description}>
+                {hasSteps ? "⬡" : "◈"} {skill.name}
+                {hasSteps && <span style={{ fontSize:9, opacity:.7, marginLeft:3 }}>·{skill.pipeline_steps.length}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       <div className="chat-input-row">
         <textarea ref={inputRef} className="chat-input" rows={2} value={input}
