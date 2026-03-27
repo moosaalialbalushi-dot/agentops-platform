@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL || "";
-const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+// Supabase anon key is a publishable key — safe to ship in client bundles.
+// Override with VITE_SUPABASE_URL / VITE_SUPABASE_KEY env vars if needed.
+const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "https://cnliqngeufcdsypuimog.supabase.co";
+const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY  || import.meta.env.VITE_SUPABASE_ANON_KEY
+                 || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubGlxbmdldWZjZHN5cHVpbW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNTk1MTksImV4cCI6MjA4ODgzNTUxOX0.dKnMsDxcwQZATCsVO7EVKluCh9MpRRipuSl1B_JCNO0";
 const AI_PROXY_URL = "/api/chat";
 
 // ─── SUPABASE CLIENT ────────────────────────────────────────────────────────
@@ -327,12 +330,18 @@ select.form-input option{background:${C.card}}
 .order-controls{display:flex;flex-direction:column;gap:3px}
 .order-btn{background:none;border:1px solid ${C.border};border-radius:4px;color:${C.dim};cursor:pointer;padding:2px 6px;font-size:10px;line-height:1;transition:all .14s}
 .order-btn:hover{color:${C.text};border-color:${C.borderHi}}
-.pipeline-card{align-self:flex-start;background:${C.card};border:1px solid rgba(167,139,250,.25);border-left:3px solid ${C.purple};border-radius:10px;padding:13px 15px;max-width:88%;width:100%}
+.pipeline-card{align-self:flex-start;background:${C.card};border:1px solid rgba(167,139,250,.25);border-left:3px solid ${C.purple};border-radius:10px;padding:13px 15px;max-width:96%;width:100%}
 .pipeline-header{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:11px;color:${C.text}}
 .pipeline-step{background:${C.surface};border:1px solid ${C.border};border-radius:7px;padding:10px 12px;margin-bottom:8px}
 .pipeline-step:last-child{margin-bottom:0}
 .pipeline-step-error{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.04)}
 .pipeline-step-label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:${C.text};margin-bottom:7px}
+.slides-deck{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.slide-card{background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(167,139,250,.05));border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:14px 16px;position:relative}
+.slide-num{position:absolute;top:8px;right:10px;font-size:9px;color:${C.dim};font-family:'JetBrains Mono',monospace;letter-spacing:.06em}
+.slide-title{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:${C.text};margin-bottom:8px}
+.slide-body{font-size:12px;color:${C.muted};line-height:1.75;white-space:pre-wrap}
+.slide-notes{margin-top:9px;padding-top:8px;border-top:1px solid ${C.border};font-size:10px;color:${C.dim};font-style:italic}
 .pipeline-step-output{font-size:12px;color:${C.text};line-height:1.7;white-space:pre-wrap;max-height:320px;overflow-y:auto}
 `;
 
@@ -1100,6 +1109,42 @@ function SkillForm({ data, onSave, onClose, saving }) {
   );
 }
 
+// ─── SLIDE DECK RENDERER ───────────────────────────────────────────────────
+function isSlideOutput(text = "") {
+  return text.includes("\n---\n") || text.includes("\n---") || text.startsWith("---");
+}
+
+function SlidesDeck({ text }) {
+  const rawSlides = text.split(/\n---+\n?/).map(s => s.trim()).filter(Boolean);
+  const slides = rawSlides.map(slide => {
+    const lines = slide.split("\n");
+    // Extract title: first ## or # heading
+    const titleLine = lines.find(l => /^#{1,3}\s/.test(l));
+    const title = titleLine ? titleLine.replace(/^#{1,3}\s+/, "") : "";
+    // Extract notes
+    const notesIdx = lines.findIndex(l => /^notes?:/i.test(l));
+    const notes = notesIdx >= 0 ? lines.slice(notesIdx).join("\n").replace(/^notes?:\s*/i, "") : "";
+    // Body: everything except title line and notes
+    const body = lines
+      .filter((l, i) => l !== titleLine && (notesIdx < 0 || i < notesIdx))
+      .join("\n").trim();
+    return { title, body, notes };
+  });
+
+  return (
+    <div className="slides-deck">
+      {slides.map((slide, i) => (
+        <div key={i} className="slide-card">
+          <span className="slide-num">Slide {i + 1} / {slides.length}</span>
+          {slide.title && <div className="slide-title">{slide.title}</div>}
+          {slide.body && <div className="slide-body">{slide.body}</div>}
+          {slide.notes && <div className="slide-notes">🎤 {slide.notes}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── CHAT PAGE ─────────────────────────────────────────────────────────────
 function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
   const [msgs, setMsgs] = useState([]);
@@ -1254,10 +1299,19 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
                     </div>
                     {step.is_image
                       ? <img src={step.output} alt="Generated" style={{ maxWidth:"100%", borderRadius:6, marginTop:6 }} />
-                      : <div className="pipeline-step-output">{step.output}</div>
+                      : (step.provider === "notebooklm" && step.model === "notebooklm-slides") || isSlideOutput(step.output)
+                        ? <SlidesDeck text={step.output} />
+                        : <div className="pipeline-step-output">{step.output}</div>
                     }
                   </div>
                 ))}
+              </div>
+            ) : m.role === "agent" && isSlideOutput(m.text) ? (
+              <div className="pipeline-card" style={{ borderLeft:`3px solid ${C.accent}` }}>
+                <div className="pipeline-header" style={{ marginBottom:8 }}>
+                  <span style={{ color:C.accent }}>⬡</span> Presentation
+                </div>
+                <SlidesDeck text={m.text} />
               </div>
             ) : (
               <div className={`msg msg-${m.role}`}>{m.text}</div>
