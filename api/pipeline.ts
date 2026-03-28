@@ -175,19 +175,11 @@ async function executeStep(step: any, input: string, prevOutput: string) {
         systemPrompt, msgs, maxTokens, temp
       );
 
-    case "xai":
+    case "openrouter":
       return callOpenAICompat(
-        "https://api.x.ai",
-        process.env.XAI_API_KEY || "",
-        model || "grok-3",
-        systemPrompt, msgs, maxTokens, temp
-      );
-
-    case "qwen":
-      return callOpenAICompat(
-        "https://dashscope.aliyuncs.com/compatible-mode",
-        process.env.QWEN_API_KEY || "",
-        model || "qwen-max",
+        "https://openrouter.ai/api",
+        process.env.OPENROUTER_API_KEY || "",
+        model || "qwen/qwen-2.5-72b-instruct:free",
         systemPrompt, msgs, maxTokens, temp
       );
 

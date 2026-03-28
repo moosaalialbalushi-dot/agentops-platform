@@ -5,12 +5,11 @@
 //
 // Required Environment Variables (set in Vercel Dashboard → Settings → Env):
 //   ANTHROPIC_API_KEY   → for Claude
-//   GEMINI_API_KEY      → for Gemini
+//   GEMINI_API_KEY      → for Gemini + Imagen + NotebookLM
 //   DEEPSEEK_API_KEY    → for DeepSeek
 //   OPENAI_API_KEY      → for OpenAI
 //   GROQ_API_KEY        → for Groq
-//   XAI_API_KEY         → for xAI / Grok  (https://console.x.ai)
-//   QWEN_API_KEY        → for Qwen / Alibaba DashScope  (https://dashscope.console.aliyun.com)
+//   OPENROUTER_API_KEY  → for OpenRouter (300+ models, many free incl. Qwen)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const config = { maxDuration: 60 };
@@ -163,38 +162,42 @@ async function callGroq({ model, system_prompt, messages, max_tokens, temperatur
   });
 }
 
-// ─── xAI (Grok) — OpenAI-compatible endpoint ────────────────────────────────
+// ─── OpenRouter — unified gateway, 300+ models, many free ───────────────────
+// Free models use the ":free" suffix e.g. "qwen/qwen-2.5-72b-instruct:free"
+// Docs: https://openrouter.ai/docs
 
-async function callXAI({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
-  const apiKey = process.env.XAI_API_KEY;
-  if (!apiKey) throw new Error("XAI_API_KEY not set. Get your key at https://console.x.ai");
+async function callOpenRouter({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not set. Get your key at https://openrouter.ai/keys");
 
-  return callOpenAI({
-    model: model || "grok-3",
-    system_prompt,
-    messages,
-    max_tokens,
-    temperature,
-    baseUrl: "https://api.x.ai",
-    apiKey,
+  const start = Date.now();
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://agentops-platform.vercel.app",
+      "X-Title": "AgentOps Platform",
+    },
+    body: JSON.stringify({
+      model: model || "qwen/qwen-2.5-72b-instruct:free",
+      max_tokens: max_tokens || 1024,
+      temperature: temperature ?? 0.7,
+      messages: [
+        { role: "system", content: system_prompt || "You are a helpful AI agent." },
+        ...messages,
+      ],
+    }),
   });
-}
 
-// ─── Qwen (Alibaba DashScope) — OpenAI-compatible endpoint ───────────────────
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `OpenRouter error ${res.status}`);
 
-async function callQwen({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
-  const apiKey = process.env.QWEN_API_KEY;
-  if (!apiKey) throw new Error("QWEN_API_KEY not set. Get your key at https://dashscope.console.aliyun.com");
-
-  return callOpenAI({
-    model: model || "qwen-max",
-    system_prompt,
-    messages,
-    max_tokens,
-    temperature,
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode",
-    apiKey,
-  });
+  return {
+    response: data.choices?.[0]?.message?.content || "",
+    tokens_used: data.usage?.total_tokens || 0,
+    latency_ms: Date.now() - start,
+  };
 }
 
 // ─── NotebookLM — powered by Gemini 2.5 Pro with specialized prompts ────────
@@ -267,11 +270,10 @@ async function callProvider(provider: string, params: ProviderParams) {
     case "openai":      return callOpenAI(params);
     case "deepseek":    return callDeepSeek(params);
     case "groq":        return callGroq(params);
-    case "xai":         return callXAI(params);
-    case "qwen":        return callQwen(params);
+    case "openrouter":  return callOpenRouter(params);
     case "notebooklm":  return callNotebookLM(params);
     case "imagen":      return callImagen(params);
-    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, xai, qwen, notebooklm, imagen`);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, notebooklm, imagen`);
   }
 }
 
