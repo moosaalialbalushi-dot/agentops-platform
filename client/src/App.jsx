@@ -194,7 +194,7 @@ const MODELS_BY_PROVIDER = {
     "mixtral-8x7b-32768",
   ],
   openrouter: [
-    // ── Free models (no cost, rate-limited) ──
+    // All free — no cost, no credits deducted (rate-limited only)
     "qwen/qwen-2.5-72b-instruct:free",
     "qwen/qwen-2.5-7b-instruct:free",
     "qwen/qwq-32b:free",
@@ -209,16 +209,6 @@ const MODELS_BY_PROVIDER = {
     "mistralai/mistral-7b-instruct:free",
     "microsoft/phi-4:free",
     "nousresearch/hermes-3-llama-3.1-405b:free",
-    // ── Paid models (use your credits) ──
-    "anthropic/claude-sonnet-4-6",
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "google/gemini-2.0-flash-001",
-    "qwen/qwen-max",
-    "qwen/qwen-plus",
-    "deepseek/deepseek-chat",
-    "mistralai/mistral-large",
-    "cohere/command-r-plus",
   ],
   notebooklm: [
     "notebooklm-research",
@@ -818,6 +808,11 @@ function AgentModal({ modal, onSave, onClose, saving, skills = [] }) {
                   onChange={e=>set(i===0?"primary_model":"fallback_model",e.target.value)}>
                   {(MODELS_BY_PROVIDER[prov]||["custom"]).map(m=><option key={m} value={m}>{m}</option>)}
                 </select>
+                {prov==="openrouter" && (
+                  <span style={{ fontSize:10, color:C.green, background:C.green+"15", padding:"2px 7px", borderRadius:5, whiteSpace:"nowrap" }}>
+                    ✓ FREE
+                  </span>
+                )}
                 <div className="order-controls">
                   <button className="order-btn" onClick={()=>moveUp(i)} disabled={i===0}>▲</button>
                   <button className="order-btn" onClick={()=>moveDown(i)} disabled={i===chain.length-1}>▼</button>

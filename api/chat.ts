@@ -170,6 +170,15 @@ async function callOpenRouter({ model, system_prompt, messages, max_tokens, temp
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not set. Get your key at https://openrouter.ai/keys");
 
+  // Block paid models — only allow models ending in ":free"
+  const selectedModel = model || "qwen/qwen-2.5-72b-instruct:free";
+  if (!selectedModel.endsWith(":free")) {
+    throw new Error(
+      `⚠ Paid model blocked: "${selectedModel}" would consume your OpenRouter credits. ` +
+      `Please select a free model (models ending in ":free") or switch to a different provider.`
+    );
+  }
+
   const start = Date.now();
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -180,7 +189,7 @@ async function callOpenRouter({ model, system_prompt, messages, max_tokens, temp
       "X-Title": "AgentOps Platform",
     },
     body: JSON.stringify({
-      model: model || "qwen/qwen-2.5-72b-instruct:free",
+      model: selectedModel,
       max_tokens: max_tokens || 1024,
       temperature: temperature ?? 0.7,
       messages: [
