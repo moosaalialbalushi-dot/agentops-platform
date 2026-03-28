@@ -8,6 +8,14 @@ const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY  || import.meta.env.VITE_SUP
                  || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubGlxbmdldWZjZHN5cHVpbW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNTk1MTksImV4cCI6MjA4ODgzNTUxOX0.dKnMsDxcwQZATCsVO7EVKluCh9MpRRipuSl1B_JCNO0";
 const AI_PROXY_URL = "/api/chat";
 
+// ─── AUDIT LOG ──────────────────────────────────────────────────────────────
+// Dispatches events picked up by ToastProvider and AuditLogPage anywhere in tree
+function auditLog(op, table, status, detail = "") {
+  window.dispatchEvent(new CustomEvent("agentops_audit", {
+    detail: { id: Date.now() + Math.random(), op, table, status, detail, ts: new Date().toISOString() }
+  }));
+}
+
 // ─── SUPABASE CLIENT ────────────────────────────────────────────────────────
 const supa = {
   headers: { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` },
@@ -15,29 +23,38 @@ const supa = {
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}`, { headers: this.headers });
       const data = await r.json();
+      if (!r.ok) { auditLog("LOAD", table, "error", data?.message || `HTTP ${r.status}`); return []; }
       return Array.isArray(data) ? data : [];
-    } catch (e) { return []; }
+    } catch (e) { auditLog("LOAD", table, "error", e.message); return []; }
   },
   async post(table, body) {
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
         method: "POST", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
       });
-      return r.json();
-    } catch (e) { return []; }
+      const data = await r.json();
+      if (r.ok) auditLog("SAVE", table, "success", `Record created`);
+      else auditLog("SAVE", table, "error", data?.message || `HTTP ${r.status}`);
+      return data;
+    } catch (e) { auditLog("SAVE", table, "error", e.message); return []; }
   },
   async patch(table, id, body) {
     try {
       const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
         method: "PATCH", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
       });
-      return r.json();
-    } catch (e) { return []; }
+      const data = await r.json();
+      if (r.ok) auditLog("UPDATE", table, "success", `Record updated`);
+      else auditLog("UPDATE", table, "error", data?.message || `HTTP ${r.status}`);
+      return data;
+    } catch (e) { auditLog("UPDATE", table, "error", e.message); return []; }
   },
   async delete(table, id) {
     try {
-      await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: this.headers });
-    } catch (e) {}
+      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: this.headers });
+      if (r.ok) auditLog("DELETE", table, "success", `Record removed`);
+      else auditLog("DELETE", table, "error", `HTTP ${r.status}`);
+    } catch (e) { auditLog("DELETE", table, "error", e.message); }
   },
 };
 
@@ -343,6 +360,19 @@ select.form-input option{background:${C.card}}
 .slide-body{font-size:12px;color:${C.muted};line-height:1.75;white-space:pre-wrap}
 .slide-notes{margin-top:9px;padding-top:8px;border-top:1px solid ${C.border};font-size:10px;color:${C.dim};font-style:italic}
 .pipeline-step-output{font-size:12px;color:${C.text};line-height:1.7;white-space:pre-wrap;max-height:320px;overflow-y:auto}
+.toast-stack{position:fixed;bottom:22px;right:22px;z-index:999999;display:flex;flex-direction:column;gap:7px;pointer-events:none}
+.toast{padding:9px 13px;border-radius:9px;font-size:11px;display:flex;gap:8px;align-items:flex-start;backdrop-filter:blur(12px);box-shadow:0 8px 24px rgba(0,0,0,.5);animation:slidein .18s ease;pointer-events:auto;max-width:300px}
+.toast-ok{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3)}
+.toast-err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3)}
+.file-chips{display:flex;gap:5px;flex-wrap:wrap;padding:6px 18px 0}
+.file-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:5px;font-size:10px;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);color:${C.accentHi};max-width:200px}
+.file-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.connector-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:11px}
+.connector-card{padding:16px;border-radius:10px;background:${C.card};border:1px solid ${C.border};transition:all .2s;border-left:3px solid var(--tc)}
+.connector-card:hover{border-color:var(--tc);transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.enhance-btn{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(167,139,250,.1));border:1px solid rgba(99,102,241,.28);color:${C.accentHi};border-radius:5px;padding:3px 9px;font-size:10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.enhance-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.25),rgba(167,139,250,.18))}
+.enhance-btn:disabled{opacity:.5;cursor:not-allowed}
 `;
 
 
@@ -387,6 +417,66 @@ function ProviderBadge({ name }) {
     <span className="provider-badge" style={{ background: p.color+"18", color: p.color, border:`1px solid ${p.color}30` }}>
       {p.logo} {p.label}
     </span>
+  );
+}
+
+// ─── TOAST PROVIDER ────────────────────────────────────────────────────────
+function ToastProvider() {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    const handler = (e) => {
+      const t = { ...e.detail, _uid: Date.now() + Math.random() };
+      setToasts(p => [t, ...p].slice(0, 5));
+      setTimeout(() => setToasts(p => p.filter(x => x._uid !== t._uid)), 4200);
+    };
+    window.addEventListener("agentops_audit", handler);
+    return () => window.removeEventListener("agentops_audit", handler);
+  }, []);
+  return (
+    <div className="toast-stack">
+      {toasts.map(t => (
+        <div key={t._uid} className={`toast ${t.status === "error" ? "toast-err" : "toast-ok"}`}>
+          <span style={{ color: t.status === "error" ? C.red : C.green, fontSize: 13, flexShrink:0 }}>
+            {t.status === "error" ? "⚠" : "✓"}
+          </span>
+          <div>
+            <div style={{ fontWeight:700, color:C.text }}>{t.op} {t.table}</div>
+            {t.detail && <div style={{ color:C.muted, fontSize:10, marginTop:2 }}>{t.detail}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── PROMPT ENHANCER ───────────────────────────────────────────────────────
+function PromptEnhancer({ value, onChange, context = "AI prompt", compact = false }) {
+  const [loading, setLoading] = useState(false);
+  const enhance = async () => {
+    if (!value?.trim() || loading) return;
+    setLoading(true);
+    try {
+      const r = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "claude", model: "claude-sonnet-4-6",
+          system_prompt: "You are a prompt engineering expert. Rewrite the provided text into a highly effective, clear, and structured AI prompt. Preserve the user's intent. Return ONLY the improved prompt — no preamble, no explanation.",
+          messages: [{ role: "user", content: `Improve this ${context}:\n\n${value}` }],
+          max_tokens: 1500,
+        }),
+      });
+      const data = await r.json();
+      if (data.response) onChange(data.response);
+      else auditLog("ENHANCE", "prompt", "error", data?.error || "No response");
+    } catch (e) { auditLog("ENHANCE", "prompt", "error", e.message); }
+    finally { setLoading(false); }
+  };
+  return (
+    <button className="enhance-btn" onClick={enhance} disabled={loading || !value?.trim()} title={`AI-enhance this ${context}`}>
+      {loading ? <span className="spin" style={{ width:10, height:10, borderWidth:1.5 }} /> : "✨"}
+      {!compact && " Enhance"}
+    </button>
   );
 }
 
@@ -724,7 +814,10 @@ function AgentModal({ modal, onSave, onClose, saving, skills = [] }) {
         <input className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this agent do?" />
       </div>
       <div className="form-group">
-        <label className="form-label">System Prompt</label>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+          <label className="form-label" style={{ marginBottom:0 }}>System Prompt</label>
+          <PromptEnhancer value={d.system_prompt} onChange={v => set("system_prompt", v)} context="agent system prompt" />
+        </div>
         <textarea className="form-input" value={d.system_prompt||""} onChange={e=>set("system_prompt",e.target.value)} placeholder="Instructions that define this agent's behavior..." rows={4} />
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -1028,7 +1121,10 @@ function SkillForm({ data, onSave, onClose, saving }) {
         </div>
       </div>
       <div className="form-group">
-        <label className="form-label">Description / Single-step Prompt</label>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+          <label className="form-label" style={{ marginBottom:0 }}>Description / Single-step Prompt</label>
+          <PromptEnhancer value={d.description} onChange={v => set("description", v)} context="skill description and prompt" />
+        </div>
         <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do? For single-step skills this is the base prompt sent to the AI." rows={3} />
       </div>
 
@@ -1073,15 +1169,26 @@ function SkillForm({ data, onSave, onClose, saving }) {
                     </div>
                   </div>
                   <div className="form-group" style={{ marginBottom:8 }}>
-                    <label className="form-label">Prompt Template</label>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      <label className="form-label" style={{ marginBottom:0 }}>Prompt Template</label>
+                      <PromptEnhancer value={step.prompt_template} onChange={v=>setStep(i,"prompt_template",v)} context="step prompt template" compact />
+                    </div>
                     <textarea className="form-input" rows={2} value={step.prompt_template||"{{input}}"}
                       onChange={e=>setStep(i,"prompt_template",e.target.value)}
-                      placeholder="Use {{input}} for original user input, {{prev}} for previous step's output" />
+                      placeholder="Use {{input}} for user input, {{prev}} for previous step output" />
                   </div>
-                  <div className="form-group" style={{ marginBottom:0 }}>
-                    <label className="form-label">System Prompt (optional)</label>
-                    <input className="form-input" style={{ fontSize:11 }} value={step.system_prompt||""} onChange={e=>setStep(i,"system_prompt",e.target.value)}
-                      placeholder="Override system prompt for this step…" />
+                  <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                    <div className="form-group" style={{ marginBottom:0, flex:1 }}>
+                      <label className="form-label">System Prompt (optional)</label>
+                      <input className="form-input" style={{ fontSize:11 }} value={step.system_prompt||""} onChange={e=>setStep(i,"system_prompt",e.target.value)}
+                        placeholder="Override system prompt for this step…" />
+                    </div>
+                    <div style={{ flexShrink:0, paddingTop:14 }}>
+                      <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:10, color:C.muted, cursor:"pointer" }}>
+                        <Toggle on={!!step.parallel} onChange={()=>setStep(i,"parallel",!step.parallel)} />
+                        Run in parallel
+                      </label>
+                    </div>
                   </div>
                 </div>
               );
@@ -1090,7 +1197,8 @@ function SkillForm({ data, onSave, onClose, saving }) {
         )}
         {(d.pipeline_steps||[]).length > 0 && (
           <div style={{ fontSize:10, color:C.muted, marginTop:8 }}>
-            Steps run in sequence. Use <code style={{ color:C.accent }}>{"{{prev}}"}</code> to reference the previous step's output.
+            Steps run in sequence by default. Toggle <strong style={{color:C.accent}}>Run in parallel</strong> on consecutive steps to execute them simultaneously.
+            Use <code style={{ color:C.accent }}>{"{{prev}}"}</code> for previous output.
           </div>
         )}
       </div>
@@ -1150,8 +1258,10 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState([]); // [{name, content, type}]
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
   const msgsRef = useRef([]);
 
   // Keep msgsRef in sync so send() always has latest history
@@ -1169,15 +1279,60 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
   const agentSkillIds = Array.isArray(agent?.skill_ids) ? agent.skill_ids : [];
   const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
 
+  const handleFileAttach = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      const isImage = file.type.startsWith("image/");
+      const content = await new Promise(res => {
+        const reader = new FileReader();
+        reader.onload = ev => res(ev.target.result);
+        if (isImage) reader.readAsDataURL(file);
+        else reader.readAsText(file);
+      });
+      setAttachedFiles(p => [...p, { name: file.name, content, type: file.type, isImage }]);
+    }
+    e.target.value = "";
+  };
+
+  const exportChat = (format) => {
+    const msgs_ = msgsRef.current;
+    if (format === "json") {
+      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `chat-${agent.name}-${Date.now()}.json`);
+    } else {
+      const md = [`# Chat with ${agent.name}`, `*Exported ${new Date().toLocaleString()}*`, ""].concat(
+        msgs_.map(m => {
+          if (m.role === "user") return `**You:** ${m.text}\n`;
+          if (m.role === "pipeline") return `**[Pipeline: ${m.skill_name}]**\n${(m.steps_output||[]).map(s=>`- ${s.label}: ${s.output}`).join("\n")}\n`;
+          return `**${agent.name}:** ${m.text || m.final_output}\n`;
+        })
+      ).join("\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+      a.download = `chat-${agent.name}-${Date.now()}.md`;
+      a.click();
+    }
+  };
+
   const send = useCallback(async () => {
-    if (!input.trim() || !agent || loading) return;
+    if ((!input.trim() && attachedFiles.length === 0) || !agent || loading) return;
     const userMsg = input.trim();
     const history = msgsRef.current;
+    // Build message with file context prepended
+    let fullMessage = userMsg;
+    if (attachedFiles.length > 0) {
+      const fileContext = attachedFiles.map(f =>
+        f.isImage
+          ? `[Image attached: ${f.name}]`
+          : `--- File: ${f.name} ---\n${f.content.slice(0, 8000)}\n--- End of ${f.name} ---`
+      ).join("\n\n");
+      fullMessage = fileContext + (userMsg ? `\n\nUser message: ${userMsg}` : "");
+    }
     setInput("");
-    setMsgs(m => [...m, { role:"user", text:userMsg, ts:new Date() }]);
+    setAttachedFiles([]);
+    setMsgs(m => [...m, { role:"user", text: userMsg || `📎 ${attachedFiles.map(f=>f.name).join(", ")}`, ts:new Date() }]);
     setLoading(true);
     try {
-      const result = await routeToAI(agent, userMsg, history, agentSkills);
+      const result = await routeToAI(agent, fullMessage, history, agentSkills);
       setMsgs(m => [...m, {
         role:"agent", text:result.response, ts:new Date(),
         meta:`${result.provider_used} · ${result.model_used} · ${result.tokens_used}tok · ${result.latency_ms}ms${result.fallback_triggered?" · FALLBACK":""}`
@@ -1263,9 +1418,16 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
           value={agent.id} onChange={e => { const a=agents.find(x=>x.id===e.target.value||x.id==e.target.value); if(a) onSelectAgent(a); }}>
           {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
-        {msgs.length > 0 && (
+        {msgs.length > 0 && (<>
+          <div style={{ position:"relative" }}>
+            <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => document.getElementById("export-chat-menu").style.display === "none" ? document.getElementById("export-chat-menu").style.display="block" : document.getElementById("export-chat-menu").style.display="none"}>↓ Export</button>
+            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:140, zIndex:9999 }}>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>{ } JSON</button>
+            </div>
+          </div>
           <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>
-        )}
+        </>)}
       </div>
 
       <div className="chat-msgs">
@@ -1350,12 +1512,31 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
         </div>
       )}
 
+      {attachedFiles.length > 0 && (
+        <div className="file-chips">
+          {attachedFiles.map((f, i) => (
+            <div key={i} className="file-chip">
+              <span>{f.isImage ? "🖼" : "📄"}</span>
+              <span className="file-chip-name">{f.name}</span>
+              <button onClick={() => setAttachedFiles(p => p.filter((_,idx)=>idx!==i))}
+                style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:11, padding:0, flexShrink:0 }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <input ref={fileInputRef} type="file" style={{ display:"none" }} multiple
+        accept=".txt,.md,.json,.csv,.pdf,.js,.py,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,image/*"
+        onChange={handleFileAttach} />
+
       <div className="chat-input-row">
+        <button className="btn btn-ghost btn-sm" style={{ alignSelf:"flex-end", flexShrink:0 }} title="Attach file"
+          onClick={() => fileInputRef.current?.click()}>📎</button>
         <textarea ref={inputRef} className="chat-input" rows={2} value={input}
           placeholder={`Message ${agent.name}… (Enter to send, Shift+Enter for new line)`}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-        <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ alignSelf:"flex-end" }}>
+        <button className="btn btn-primary" onClick={send} disabled={loading || (!input.trim() && attachedFiles.length === 0)} style={{ alignSelf:"flex-end" }}>
           {loading ? <Spinner /> : "Send ↑"}
         </button>
       </div>
@@ -1563,15 +1744,199 @@ function DatabasePage({ agents, skills, runs }) {
   );
 }
 
+// ─── CONNECTORS PAGE ───────────────────────────────────────────────────────
+const CONNECTOR_TYPES = {
+  email:       { label:"Email",        color:"#4285f4", icon:"✉", fields:[{k:"smtp_host",l:"SMTP Host"},{k:"username",l:"Username"},{k:"password",l:"Password / App Key",secret:true},{k:"from_name",l:"From Name"}] },
+  whatsapp:    { label:"WhatsApp",     color:"#25d366", icon:"📱", fields:[{k:"phone_number_id",l:"Phone Number ID"},{k:"access_token",l:"Access Token",secret:true},{k:"verify_token",l:"Webhook Verify Token"}] },
+  slack:       { label:"Slack",        color:"#4a154b", icon:"💬", fields:[{k:"bot_token",l:"Bot Token",secret:true},{k:"channel",l:"Default Channel"}] },
+  webhook:     { label:"Webhook",      color:"#f59e0b", icon:"⚡", fields:[{k:"url",l:"Endpoint URL"},{k:"secret",l:"Secret / Auth Header",secret:true},{k:"method",l:"HTTP Method (GET/POST)"}] },
+  github:      { label:"GitHub",       color:"#6e40c9", icon:"⊕", fields:[{k:"token",l:"Personal Access Token",secret:true},{k:"owner",l:"Owner / Org"},{k:"repo",l:"Repository"}] },
+  googledrive: { label:"Google Drive", color:"#fbbc04", icon:"▦", fields:[{k:"client_id",l:"Client ID"},{k:"client_secret",l:"Client Secret",secret:true},{k:"refresh_token",l:"Refresh Token",secret:true}] },
+  telegram:    { label:"Telegram",     color:"#0088cc", icon:"✈", fields:[{k:"bot_token",l:"Bot Token",secret:true},{k:"chat_id",l:"Chat ID"}] },
+  custom:      { label:"Custom API",   color:"#8b5cf6", icon:"✳", fields:[{k:"url",l:"Base URL"},{k:"api_key",l:"API Key",secret:true},{k:"headers",l:"Extra Headers (JSON)"}] },
+};
+
+function ConnectorModal({ modal, onSave, onClose, saving }) {
+  const [d, setD] = useState(modal.data);
+  const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+  const setConf = (k, v) => setD(p => ({ ...p, config: { ...(p.config||{}), [k]: v } }));
+  const ct = CONNECTOR_TYPES[d.type] || CONNECTOR_TYPES.custom;
+  return (
+    <Modal title={`${modal.mode==="add"?"New":"Edit"} Connector`} onClose={onClose}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+        <div className="form-group" style={{ gridColumn:"span 2" }}>
+          <label className="form-label">Name</label>
+          <input className="form-input" value={d.name||""} onChange={e=>set("name",e.target.value)} placeholder="e.g. My WhatsApp Bot" autoFocus />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Type</label>
+          <select className="form-input" value={d.type||"webhook"} onChange={e=>set("type",e.target.value)}>
+            {Object.entries(CONNECTOR_TYPES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Status</label>
+          <select className="form-input" value={d.status||"inactive"} onChange={e=>set("status",e.target.value)}>
+            {["active","inactive","error"].map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      {ct.fields.map(f => (
+        <div key={f.k} className="form-group">
+          <label className="form-label">{f.l}</label>
+          <input className="form-input" type={f.secret?"password":"text"}
+            value={(d.config||{})[f.k]||""} onChange={e=>setConf(f.k,e.target.value)} placeholder={`Enter ${f.l}…`} />
+        </div>
+      ))}
+      <div className="form-group">
+        <label className="form-label">Notes</label>
+        <textarea className="form-input" rows={2} value={d.notes||""} onChange={e=>set("notes",e.target.value)} placeholder="Purpose, linked agents, instructions…" />
+      </div>
+      <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:12 }}>
+        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={()=>onSave(d)} disabled={saving || !d.name?.trim()}>
+          {saving ? <Spinner /> : modal.mode==="add" ? "Add Connector" : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function ConnectorsPage({ connectors, setConnectors, loading }) {
+  const [modal, setModal] = useState(null);
+  const [del, setDel] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const blank = { name:"", type:"webhook", status:"inactive", config:{}, notes:"" };
+
+  const save = async (d) => {
+    if (!d.name?.trim()) return;
+    setSaving(true);
+    try {
+      if (modal.mode === "add") {
+        const created = await supa.post("connectors", d);
+        const item = Array.isArray(created) ? created[0] : created;
+        setConnectors(p => [...p, item?.id ? item : { ...d, id:Date.now(), created_at:new Date().toISOString() }]);
+      } else {
+        const updated = await supa.patch("connectors", d.id, d);
+        const item = Array.isArray(updated) ? updated[0] : updated;
+        setConnectors(p => p.map(x => x.id===d.id ? (item?.id ? item : d) : x));
+      }
+    } finally { setSaving(false); setModal(null); }
+  };
+
+  const doDelete = async () => {
+    await supa.delete("connectors", del.id);
+    setConnectors(p => p.filter(x => x.id !== del.id));
+    setDel(null);
+  };
+
+  if (loading) return <div style={{ textAlign:"center", padding:"60px 0", color:C.muted }}><Spinner /></div>;
+
+  return (
+    <div className="slide-in">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div style={{ fontSize:12, color:C.muted }}>Connect external services so agents can read, write, and act on your data.</div>
+        <button className="btn btn-primary" onClick={()=>setModal({ mode:"add", data:{ ...blank } })}>⊕ Add Connector</button>
+      </div>
+
+      {connectors.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">⌘</div>
+          <div className="empty-text">No connectors yet.<br/>Add your first integration to get started.</div>
+        </div>
+      ) : (
+        <div className="connector-grid">
+          {connectors.map(c => {
+            const ct = CONNECTOR_TYPES[c.type] || CONNECTOR_TYPES.custom;
+            const statusColor = c.status==="active"?C.green:c.status==="error"?C.red:C.muted;
+            return (
+              <div key={c.id} className="connector-card" style={{ "--tc": ct.color }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                  <div>
+                    <span style={{ fontSize:9, padding:"2px 7px", borderRadius:3, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em", background:ct.color+"18", color:ct.color, border:`1px solid ${ct.color}28`, display:"inline-flex", alignItems:"center", gap:4, marginBottom:6 }}>
+                      {ct.icon} {ct.label}
+                    </span>
+                    <div style={{ fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:800 }}>{c.name}</div>
+                  </div>
+                  <div style={{ display:"flex", gap:3, alignItems:"center" }}>
+                    <span className={`status-dot ${c.status}`} style={{ width:7, height:7, background:statusColor, boxShadow: c.status==="active"?`0 0 7px ${C.green}`:undefined }} />
+                    <button className="icon-btn" onClick={()=>setModal({ mode:"edit", data:{ ...c } })}>✎</button>
+                    <button className="icon-btn" style={{ color:C.dim }} onClick={()=>setDel(c)}>⊗</button>
+                  </div>
+                </div>
+                {c.notes && <p style={{ color:C.muted, fontSize:11, lineHeight:1.6, marginBottom:8 }}>{c.notes}</p>}
+                <div style={{ fontSize:10, color:C.dim }}>Added {relative(c.created_at)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modal && <ConnectorModal modal={modal} onSave={save} onClose={()=>setModal(null)} saving={saving} />}
+      {del && (
+        <Modal title="Delete Connector" onClose={()=>setDel(null)}>
+          <p style={{ color:C.muted, marginBottom:18 }}>Delete connector <span style={{ color:C.red }}>{del.name}</span>?</p>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:9 }}>
+            <button className="btn btn-ghost" onClick={()=>setDel(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={doDelete}>Delete</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── AUDIT LOG PAGE ────────────────────────────────────────────────────────
+function AuditLogPage() {
+  const [logs, setLogs] = useState([]);
+  useEffect(() => {
+    const handler = (e) => setLogs(p => [e.detail, ...p].slice(0, 300));
+    window.addEventListener("agentops_audit", handler);
+    return () => window.removeEventListener("agentops_audit", handler);
+  }, []);
+
+  const opColor = { SAVE:C.green, UPDATE:C.cyan, DELETE:C.red, LOAD:C.muted, ENHANCE:C.purple };
+  return (
+    <div className="slide-in">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+        <div style={{ fontSize:12, color:C.muted }}>Live log of all database operations. Shows saves, updates, deletes and errors.</div>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setLogs([])}>Clear</button>
+      </div>
+      {logs.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">▦</div>
+          <div className="empty-text">No activity yet.<br/>Save an agent or skill to see entries here.</div>
+        </div>
+      ) : (
+        <div className="run-log">
+          {logs.map((l, i) => (
+            <div key={i} className="audit-row">
+              <span style={{ color: l.status==="error" ? C.red : C.green, fontSize:13, flexShrink:0 }}>
+                {l.status==="error" ? "⚠" : "✓"}
+              </span>
+              <span style={{ color: opColor[l.op] || C.muted, fontWeight:700, fontSize:11, minWidth:60 }}>{l.op}</span>
+              <span style={{ color:C.text, fontSize:11 }}>{l.table}</span>
+              {l.detail && <span style={{ color:C.muted, fontSize:10 }}>{l.detail}</span>}
+              <span style={{ marginLeft:"auto", color:C.dim, fontSize:10 }}>{relative(l.ts)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
 const NAV = [
-  { id:"command",   icon:"◎", label:"Command Center", group:"main" },
-  { id:"agents",    icon:"⬡", label:"Agents",         group:"main", countKey:"agents" },
-  { id:"skills",    icon:"◈", label:"Skills",          group:"main", countKey:"skills" },
-  { id:"chat",      icon:"💬", label:"Chat",            group:"main" },
-  { id:"runs",      icon:"▶", label:"Run History",     group:"data", countKey:"runs" },
-  { id:"database",  icon:"▦", label:"Database",        group:"data" },
-  { id:"apikeys",   icon:"🔑", label:"API Keys",        group:"data" },
+  { id:"command",    icon:"◎", label:"Command Center", group:"main" },
+  { id:"agents",     icon:"⬡", label:"Agents",         group:"main", countKey:"agents" },
+  { id:"skills",     icon:"◈", label:"Skills",          group:"main", countKey:"skills" },
+  { id:"connectors", icon:"⌘", label:"Connectors",      group:"main", countKey:"connectors" },
+  { id:"chat",       icon:"💬", label:"Chat",            group:"main" },
+  { id:"runs",       icon:"▶", label:"Run History",     group:"data", countKey:"runs" },
+  { id:"audit",      icon:"▦", label:"Audit Log",       group:"data" },
+  { id:"database",   icon:"⬟", label:"Database",        group:"data" },
+  { id:"apikeys",    icon:"🔑", label:"API Keys",        group:"data" },
 ];
 
 export default function App() {
@@ -1579,24 +1944,24 @@ export default function App() {
   const [agents, setAgents] = useState([]);
   const [skills, setSkills] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [connectors, setConnectors] = useState([]);
   const [chatAgent, setChatAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [providerStatus, setProviderStatus] = useState({ claude:false, gemini:false, deepseek:false });
 
   const loadData = async () => {
     setLoading(true);
-    const [a, s, r] = await Promise.all([
+    const [a, s, r, cn] = await Promise.all([
       supa.get("agents", "order=created_at.asc"),
       supa.get("skills", "order=created_at.asc"),
       supa.get("agent_runs", "order=started_at.desc&limit=200"),
+      supa.get("connectors", "order=created_at.asc"),
     ]);
-    const agentArr = Array.isArray(a)?a:[];
-    const skillArr = Array.isArray(s)?s:[];
-    const runArr = Array.isArray(r)?r:[];
-    setAgents(agentArr);
-    setSkills(skillArr);
-    setRuns(runArr);
-    if (!chatAgent && agentArr.length>0) setChatAgent(agentArr[0]);
+    setAgents(Array.isArray(a)?a:[]);
+    setSkills(Array.isArray(s)?s:[]);
+    setRuns(Array.isArray(r)?r:[]);
+    setConnectors(Array.isArray(cn)?cn:[]);
+    if (!chatAgent && Array.isArray(a) && a.length>0) setChatAgent(a[0]);
     setLoading(false);
   };
 
@@ -1604,11 +1969,12 @@ export default function App() {
 
   const goChat = (agent) => { setChatAgent(agent); setPage("chat"); };
 
-  const counts = { agents:agents.length, skills:skills.length, runs:runs.length };
+  const counts = { agents:agents.length, skills:skills.length, runs:runs.length, connectors:connectors.length };
 
   return (
     <>
       <style>{STYLES}</style>
+      <ToastProvider />
       <div className="app">
         <div className="nebula" />
 
@@ -1688,12 +2054,14 @@ export default function App() {
 
           {page !== "chat" && (
             <div className="content">
-              {page==="command" && <CommandCenter agents={agents} skills={skills} runs={runs} onChat={goChat} />}
-              {page==="agents"  && <AgentsPage agents={agents} setAgents={setAgents} skills={skills} onChat={goChat} loading={loading} />}
-              {page==="skills"  && <SkillsPage skills={skills} setSkills={setSkills} loading={loading} />}
-              {page==="runs"    && <RunHistoryPage runs={runs} agents={agents} />}
-              {page==="database"&& <DatabasePage agents={agents} skills={skills} runs={runs} />}
-              {page==="apikeys" && <ApiKeysPage />}
+              {page==="command"    && <CommandCenter agents={agents} skills={skills} runs={runs} onChat={goChat} />}
+              {page==="agents"    && <AgentsPage agents={agents} setAgents={setAgents} skills={skills} onChat={goChat} loading={loading} />}
+              {page==="skills"    && <SkillsPage skills={skills} setSkills={setSkills} loading={loading} />}
+              {page==="connectors"&& <ConnectorsPage connectors={connectors} setConnectors={setConnectors} loading={loading} />}
+              {page==="audit"     && <AuditLogPage />}
+              {page==="runs"      && <RunHistoryPage runs={runs} agents={agents} />}
+              {page==="database"  && <DatabasePage agents={agents} skills={skills} runs={runs} />}
+              {page==="apikeys"   && <ApiKeysPage />}
             </div>
           )}
 
