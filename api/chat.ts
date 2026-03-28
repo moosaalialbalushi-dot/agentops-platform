@@ -1,6 +1,6 @@
 // ─── /api/chat.js ────────────────────────────────────────────────────────────
 // Vercel Serverless Function — Multi-provider AI proxy
-// Supports: Claude, Gemini, DeepSeek, OpenAI, Groq + fallback logic
+// Supports: Claude, Gemini, DeepSeek, OpenAI, Groq, xAI (Grok), Qwen + fallback logic
 // Supports multi-turn conversation history via `messages` array
 //
 // Required Environment Variables (set in Vercel Dashboard → Settings → Env):
@@ -9,6 +9,8 @@
 //   DEEPSEEK_API_KEY    → for DeepSeek
 //   OPENAI_API_KEY      → for OpenAI
 //   GROQ_API_KEY        → for Groq
+//   XAI_API_KEY         → for xAI / Grok  (https://console.x.ai)
+//   QWEN_API_KEY        → for Qwen / Alibaba DashScope  (https://dashscope.console.aliyun.com)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const config = { maxDuration: 60 };
@@ -161,6 +163,40 @@ async function callGroq({ model, system_prompt, messages, max_tokens, temperatur
   });
 }
 
+// ─── xAI (Grok) — OpenAI-compatible endpoint ────────────────────────────────
+
+async function callXAI({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
+  const apiKey = process.env.XAI_API_KEY;
+  if (!apiKey) throw new Error("XAI_API_KEY not set. Get your key at https://console.x.ai");
+
+  return callOpenAI({
+    model: model || "grok-3",
+    system_prompt,
+    messages,
+    max_tokens,
+    temperature,
+    baseUrl: "https://api.x.ai",
+    apiKey,
+  });
+}
+
+// ─── Qwen (Alibaba DashScope) — OpenAI-compatible endpoint ───────────────────
+
+async function callQwen({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
+  const apiKey = process.env.QWEN_API_KEY;
+  if (!apiKey) throw new Error("QWEN_API_KEY not set. Get your key at https://dashscope.console.aliyun.com");
+
+  return callOpenAI({
+    model: model || "qwen-max",
+    system_prompt,
+    messages,
+    max_tokens,
+    temperature,
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode",
+    apiKey,
+  });
+}
+
 // ─── NotebookLM — powered by Gemini 2.5 Pro with specialized prompts ────────
 
 const NOTEBOOKLM_PROMPTS: Record<string, string> = {
@@ -231,9 +267,11 @@ async function callProvider(provider: string, params: ProviderParams) {
     case "openai":      return callOpenAI(params);
     case "deepseek":    return callDeepSeek(params);
     case "groq":        return callGroq(params);
+    case "xai":         return callXAI(params);
+    case "qwen":        return callQwen(params);
     case "notebooklm":  return callNotebookLM(params);
     case "imagen":      return callImagen(params);
-    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, notebooklm, imagen`);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, xai, qwen, notebooklm, imagen`);
   }
 }
 

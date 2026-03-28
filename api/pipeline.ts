@@ -175,6 +175,22 @@ async function executeStep(step: any, input: string, prevOutput: string) {
         systemPrompt, msgs, maxTokens, temp
       );
 
+    case "xai":
+      return callOpenAICompat(
+        "https://api.x.ai",
+        process.env.XAI_API_KEY || "",
+        model || "grok-3",
+        systemPrompt, msgs, maxTokens, temp
+      );
+
+    case "qwen":
+      return callOpenAICompat(
+        "https://dashscope.aliyuncs.com/compatible-mode",
+        process.env.QWEN_API_KEY || "",
+        model || "qwen-max",
+        systemPrompt, msgs, maxTokens, temp
+      );
+
     case "imagen":
       return callImagen(model || "imagen-3.0-generate-002", prompt);
 
