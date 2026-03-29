@@ -1,44 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { supabase, db } from "@/lib/supabase";
 
-// ─── CONFIG ────────────────────────────────────────────────────────────────
-const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL || "";
-const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+// ─── CONFIG ───────────────────────────────────────────────────
 const AI_PROXY_URL = "/api/chat";
 
-// ─── SUPABASE CLIENT ────────────────────────────────────────────────────────
-const supa = {
-  headers: { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` },
-  async get(table, params = "") {
-    try {
-      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}`, { headers: this.headers });
-      const data = await r.json();
-      return Array.isArray(data) ? data : [];
-    } catch (e) { return []; }
-  },
-  async post(table, body) {
-    try {
-      const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
-        method: "POST", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
-      });
-      return r.json();
-    } catch (e) { return []; }
-  },
-  async patch(table, id, body) {
-    try {
-      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
-        method: "PATCH", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
-      });
-      return r.json();
-    } catch (e) { return []; }
-  },
-  async delete(table, id) {
-    try {
-      await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: this.headers });
-    } catch (e) {}
-  },
-};
-
-// ─── MULTI-AI ROUTER ───────────────────────────────────────────────────────
+// ─── MULTI-AI ROUTER ──────────────────────────────────────────
 async function routeToAI(agent, userMessage) {
   const r = await fetch(AI_PROXY_URL, {
     method: "POST",
@@ -56,24 +22,34 @@ async function routeToAI(agent, userMessage) {
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data?.error || `API error ${r.status}`);
+
   const { response, provider_used, model_used, fallback_triggered, latency_ms, tokens_used } = data;
+
+  // Log run to Supabase
   try {
-    await supa.post("agent_runs", {
-      agent_id: agent.id, provider_used, model_used,
-      prompt: userMessage.slice(0, 500), response: response.slice(0, 2000),
-      status: "completed", tokens_used: tokens_used || 0, latency_ms: latency_ms || 0,
-      fallback_triggered, ended_at: new Date().toISOString(),
+    await db.runs.create({
+      agent_id: agent.id,
+      provider_used,
+      model_used,
+      prompt: userMessage.slice(0, 500),
+      response: response.slice(0, 2000),
+      status: "completed",
+      tokens_used: tokens_used || 0,
+      latency_ms: latency_ms || 0,
+      fallback_triggered,
+      ended_at: new Date().toISOString(),
     });
-    await supa.patch("agents", agent.id, {
+    await db.agents.update(agent.id, {
       total_runs: (agent.total_runs || 0) + 1,
       total_tokens: (agent.total_tokens || 0) + (tokens_used || 0),
-      updated_at: new Date().toISOString(),
     });
-  } catch (e) {}
+  } catch (e) {
+    console.error("Failed to log run:", e);
+  }
   return data;
 }
 
-// ─── DESIGN TOKENS ────────────────────────────────────────────────────────
+// ─── DESIGN TOKENS ────────────────────────────────────────────
 const C = {
   bg: "#05070d", surface: "#0a0d16", card: "#0f1420", border: "#1a2035",
   borderHi: "#2a3550", accent: "#6366f1", accentHi: "#818cf8",
@@ -91,22 +67,22 @@ const PERSONAS = {
 };
 
 const PROVIDERS = {
-  claude:    { label: "Claude",    color: "#d97706", logo: "◆" },
-  gemini:    { label: "Gemini",    color: "#4285f4", logo: "✦" },
-  deepseek:  { label: "DeepSeek", color: "#10b981", logo: "◉" },
-  openai:    { label: "OpenAI",   color: "#74aa9c", logo: "⊕" },
-  mistral:   { label: "Mistral",  color: "#ff7000", logo: "◐" },
-  cohere:    { label: "Cohere",   color: "#39594d", logo: "◑" },
-  groq:      { label: "Groq",     color: "#f55036", logo: "◧" },
-  custom:    { label: "Custom",   color: "#8b5cf6", logo: "✳" },
+  claude:   { label: "Claude",   color: "#d97706", logo: "◆" },
+  gemini:   { label: "Gemini",   color: "#4285f4", logo: "✦" },
+  deepseek: { label: "DeepSeek", color: "#10b981", logo: "◉" },
+  openai:   { label: "OpenAI",   color: "#74aa9c", logo: "⊕" },
+  mistral:  { label: "Mistral",  color: "#ff7000", logo: "◐" },
+  cohere:   { label: "Cohere",   color: "#39594d", logo: "◑" },
+  groq:     { label: "Groq",     color: "#f55036", logo: "◧" },
+  custom:   { label: "Custom",   color: "#8b5cf6", logo: "✳" },
 };
 
 const MODELS_BY_PROVIDER = {
-  claude:   ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+  claude:   ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022"],
   gemini:   ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-pro"],
   deepseek: ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
   openai:   ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1", "o1-mini"],
-  mistral:  ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"],
+  mistral:  ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
   cohere:   ["command-r-plus", "command-r", "command"],
   groq:     ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
   custom:   ["custom-model"],
@@ -118,7 +94,7 @@ const CAT_COLORS = {
   security: "#ef4444", comms: "#34d399", analysis: "#60a5fa", general: "#94a3b8",
 };
 
-// ─── STYLES ────────────────────────────────────────────────────────────────
+// ─── STYLES ───────────────────────────────────────────────────
 const STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -255,7 +231,7 @@ select.form-input option{background:${C.card}}
 .order-btn:hover{color:${C.text};border-color:${C.borderHi}}
 `;
 
-// ─── HELPERS ───────────────────────────────────────────────────────────────
+// ─── HELPERS ──────────────────────────────────────────────────
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(0)+"k" : String(n||0);
 const relative = iso => { if (!iso) return "—"; const d = (Date.now()-new Date(iso))/1000; if (d<60) return `${~~d}s ago`; if (d<3600) return `${~~(d/60)}m ago`; if (d<86400) return `${~~(d/3600)}h ago`; return `${~~(d/86400)}d ago`; };
 const downloadJSON = (data, filename) => {
@@ -265,7 +241,7 @@ const downloadJSON = (data, filename) => {
   a.click();
 };
 
-// ─── REUSABLE COMPONENTS ───────────────────────────────────────────────────
+// ─── REUSABLE COMPONENTS ──────────────────────────────────────
 function Modal({ title, onClose, children, wide, xl }) {
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -299,24 +275,21 @@ function ProviderBadge({ name }) {
   );
 }
 
-// ─── COMMAND CENTER ────────────────────────────────────────────────────────
+// ─── COMMAND CENTER ───────────────────────────────────────────
 function CommandCenter({ agents, skills, runs, onChat }) {
   const active = agents.filter(a => a.status === "active").length;
   const totalRuns = agents.reduce((s,a) => s+(a.total_runs||0), 0);
   const totalTok = agents.reduce((s,a) => s+(a.total_tokens||0), 0);
   const recent = [...runs].sort((a,b) => new Date(b.started_at||0)-new Date(a.started_at||0)).slice(0,8);
 
-  const provDist = {};
-  runs.forEach(r => { if (r.provider_used) provDist[r.provider_used] = (provDist[r.provider_used]||0)+1; });
-
   return (
     <div className="slide-in">
       <div className="stat-grid">
         {[
-          { label:"Active Agents",    value:active,             sub:`${agents.length-active} standby`,        c:C.green  },
-          { label:"Registered Skills",value:skills.length,      sub:`${skills.filter(s=>s.is_active).length} enabled`, c:C.accent },
-          { label:"Total Runs",        value:fmt(totalRuns),    sub:"all agents all time",                    c:C.cyan   },
-          { label:"Tokens Consumed",   value:fmt(totalTok),     sub:"across all providers",                   c:C.yellow },
+          { label:"Active Agents",    value:active,          sub:`${agents.length-active} standby`,        c:C.green  },
+          { label:"Registered Skills",value:skills.length,   sub:`${skills.filter(s=>s.is_active).length} enabled`, c:C.accent },
+          { label:"Total Runs",        value:fmt(totalRuns), sub:"all agents all time",                    c:C.cyan   },
+          { label:"Tokens Consumed",   value:fmt(totalTok),  sub:"across all providers",                   c:C.yellow },
         ].map(s => (
           <div key={s.label} className="stat-card" style={{ "--c":s.c }}>
             <div className="stat-label">{s.label}</div>
@@ -372,38 +345,11 @@ function CommandCenter({ agents, skills, runs, onChat }) {
           </div>
         </div>
       </div>
-
-      {/* Provider Distribution */}
-      <div className="card" style={{ padding:16 }}>
-        <div className="section-title">◆ Provider Distribution</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10 }}>
-          {Object.entries(PROVIDERS).slice(0,4).map(([key, p]) => {
-            const agentsUsing = agents.filter(a=>a.primary_provider===key||a.fallback_provider===key).length;
-            const runsUsing = runs.filter(r=>r.provider_used===key).length;
-            return (
-              <div key={key} style={{ background:C.surface, border:`1px solid ${p.color}22`, borderRadius:9, padding:"12px 14px" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
-                  <span style={{ color:p.color, fontSize:15 }}>{p.logo}</span>
-                  <span style={{ fontFamily:"'Syne',sans-serif", fontSize:12, fontWeight:700 }}>{p.label}</span>
-                </div>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:4 }}>
-                  {[["PRIMARY",agents.filter(a=>a.primary_provider===key).length],["FALLBACK",agents.filter(a=>a.fallback_provider===key).length],["RUNS",runsUsing]].map(([l,v])=>(
-                    <div key={l} style={{ textAlign:"center" }}>
-                      <div style={{ fontFamily:"'Syne',sans-serif", fontSize:14, fontWeight:800, color:p.color }}>{v}</div>
-                      <div style={{ fontSize:9, color:C.muted, letterSpacing:".07em" }}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }
 
-// ─── AGENTS PAGE ───────────────────────────────────────────────────────────
+// ─── AGENTS PAGE ──────────────────────────────────────────────
 function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -425,21 +371,22 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     setSaving(true);
     try {
       if (modal.mode === "add") {
-        const created = await supa.post("agents", d);
-        const item = Array.isArray(created) ? created[0] : created;
-        if (item?.id) setAgents(a => [...a, item]);
-        else setAgents(a => [...a, { ...d, id: Date.now(), created_at: new Date().toISOString() }]);
+        const { data, error } = await db.agents.create(d);
+        if (error) throw error;
+        if (data) setAgents(a => [...a, data]);
       } else {
-        const updated = await supa.patch("agents", d.id, d);
-        const item = Array.isArray(updated) ? updated[0] : updated;
-        setAgents(a => a.map(x => x.id === d.id ? (item?.id ? item : d) : x));
+        const { data, error } = await db.agents.update(d.id, d);
+        if (error) throw error;
+        setAgents(a => a.map(x => x.id === d.id ? (data || d) : x));
       }
+    } catch (e) {
+      console.error("Save failed:", e);
     } finally { setSaving(false); setModal(null); }
   };
 
   const doDelete = async () => {
-    await supa.delete("agents", del.id);
-    setAgents(a => a.filter(x => x.id !== del.id));
+    const { error } = await db.agents.remove(del.id);
+    if (!error) setAgents(a => a.filter(x => x.id !== del.id));
     setDel(null);
   };
 
@@ -451,13 +398,12 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const data = JSON.parse(ev.target.result);
-        const items = Array.isArray(data) ? data : [data];
-        for (const item of items) {
+        const items = JSON.parse(ev.target.result);
+        const arr = Array.isArray(items) ? items : [items];
+        for (const item of arr) {
           const { id, created_at, updated_at, total_runs, total_tokens, ...rest } = item;
-          const created = await supa.post("agents", { ...rest, total_runs:0, total_tokens:0 });
-          const newItem = Array.isArray(created) ? created[0] : created;
-          if (newItem?.id) setAgents(a => [...a, newItem]);
+          const { data } = await db.agents.create({ ...rest, total_runs:0, total_tokens:0 });
+          if (data) setAgents(a => [...a, data]);
         }
       } catch (err) { alert("Import failed: " + err.message); }
     };
@@ -585,9 +531,8 @@ function AgentModal({ modal, onSave, onClose, saving }) {
         </div>
       </div>
 
-      {/* AI Provider Chain */}
       <div className="provider-routing">
-        <div className="routing-title">⬡ AI Provider Chain — drag to reorder priority</div>
+        <div className="routing-title">⬡ AI Provider Chain</div>
         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
           {chain.map((prov, i) => {
             const p = PROVIDERS[prov] || { label:prov, color:C.muted, logo:"?" };
@@ -650,7 +595,7 @@ function AgentModal({ modal, onSave, onClose, saving }) {
   );
 }
 
-// ─── SKILLS PAGE ───────────────────────────────────────────────────────────
+// ─── SKILLS PAGE ──────────────────────────────────────────────
 function SkillsPage({ skills, setSkills, loading }) {
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -671,26 +616,28 @@ function SkillsPage({ skills, setSkills, loading }) {
     setSaving(true);
     try {
       if (modal.mode === "add") {
-        const created = await supa.post("skills", d);
-        const item = Array.isArray(created) ? created[0] : created;
-        setSkills(s => [...s, item?.id ? item : { ...d, id:Date.now(), created_at:new Date().toISOString() }]);
+        const { data, error } = await db.skills.create(d);
+        if (error) throw error;
+        if (data) setSkills(s => [...s, data]);
       } else {
-        const updated = await supa.patch("skills", d.id, d);
-        const item = Array.isArray(updated) ? updated[0] : updated;
-        setSkills(s => s.map(x => x.id===d.id ? (item?.id ? item : d) : x));
+        const { data, error } = await db.skills.update(d.id, d);
+        if (error) throw error;
+        setSkills(s => s.map(x => x.id===d.id ? (data || d) : x));
       }
+    } catch (e) {
+      console.error("Save failed:", e);
     } finally { setSaving(false); setModal(null); }
   };
 
   const toggleActive = async (skill) => {
     const updated = { ...skill, is_active: !skill.is_active };
-    await supa.patch("skills", skill.id, { is_active: updated.is_active });
-    setSkills(s => s.map(x => x.id===skill.id ? updated : x));
+    const { error } = await db.skills.update(skill.id, { is_active: updated.is_active });
+    if (!error) setSkills(s => s.map(x => x.id===skill.id ? updated : x));
   };
 
   const doDelete = async () => {
-    await supa.delete("skills", del.id);
-    setSkills(s => s.filter(x => x.id !== del.id));
+    const { error } = await db.skills.remove(del.id);
+    if (!error) setSkills(s => s.filter(x => x.id !== del.id));
     setDel(null);
   };
 
@@ -708,10 +655,8 @@ function SkillsPage({ skills, setSkills, loading }) {
   const processImport = async () => {
     try {
       let data;
-      // Try JSON first
       try { data = JSON.parse(importText); }
       catch {
-        // If not JSON, parse as text — create a single skill
         data = [{
           name: "Imported Skill",
           identifier: "imported_skill_"+Date.now(),
@@ -723,9 +668,8 @@ function SkillsPage({ skills, setSkills, loading }) {
       const items = Array.isArray(data) ? data : [data];
       for (const item of items) {
         const { id, created_at, ...rest } = item;
-        const created = await supa.post("skills", rest);
-        const newItem = Array.isArray(created) ? created[0] : created;
-        setSkills(s => [...s, newItem?.id ? newItem : { ...rest, id:Date.now(), created_at:new Date().toISOString() }]);
+        const { data: newItem } = await db.skills.create(rest);
+        if (newItem) setSkills(s => [...s, newItem]);
       }
       setShowImportModal(false);
       setImportText("");
@@ -797,18 +741,16 @@ function SkillsPage({ skills, setSkills, loading }) {
         </div>
       )}
 
-      {/* Skill Modal */}
       {modal && (
         <Modal title={`${modal.mode==="add"?"Register New":"Edit"} Skill`} onClose={() => setModal(null)}>
           <SkillForm data={modal.data} onSave={saveSkill} onClose={() => setModal(null)} saving={saving} />
         </Modal>
       )}
 
-      {/* Import Modal */}
       {showImportModal && (
         <Modal title="Import Skills" onClose={() => setShowImportModal(false)} wide>
           <p style={{ color:C.muted, fontSize:12, marginBottom:12 }}>
-            Paste JSON (array or single skill), a skill description in plain text, or any structured format. The system will auto-parse it.
+            Paste JSON (array or single skill), a skill description in plain text, or any structured format.
           </p>
           <textarea className="form-input" value={importText} onChange={e=>setImportText(e.target.value)}
             placeholder='[{"name":"MySkill","identifier":"my_skill","category":"retrieval","description":"..."}]'
@@ -874,7 +816,7 @@ function SkillForm({ data, onSave, onClose, saving }) {
       </div>
       <div className="form-group">
         <label className="form-label">Description</label>
-        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do? Include input/output format, use cases..." rows={4} />
+        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do?" rows={4} />
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
         <Toggle on={d.is_active!==false} onChange={() => set("is_active",!d.is_active)} />
@@ -890,23 +832,15 @@ function SkillForm({ data, onSave, onClose, saving }) {
   );
 }
 
-// ─── CHAT PAGE ─────────────────────────────────────────────────────────────
+// ─── CHAT PAGE ────────────────────────────────────────────────
 function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
-  const inputRef = useRef(null);
 
-  // ALL HOOKS MUST BE BEFORE ANY CONDITIONAL RETURNS
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior:"smooth" });
-  }, [msgs]);
-
-  useEffect(() => {
-    // Reset messages when agent changes
-    setMsgs([]);
-  }, [agent?.id]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
+  useEffect(() => { setMsgs([]); }, [agent?.id]);
 
   const send = useCallback(async () => {
     if (!input.trim() || !agent || loading) return;
@@ -928,7 +862,6 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
     } finally { setLoading(false); }
   }, [input, agent, loading, setAgents]);
 
-  // CONDITIONAL RENDER AFTER ALL HOOKS
   if (!agent) {
     return (
       <div className="chat-wrap slide-in" style={{ alignItems:"center", justifyContent:"center", color:C.muted, gap:12 }}>
@@ -963,9 +896,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
           value={agent.id} onChange={e => { const a=agents.find(x=>x.id===e.target.value||x.id==e.target.value); if(a) onSelectAgent(a); }}>
           {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
-        {msgs.length > 0 && (
-          <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>
-        )}
+        {msgs.length > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>}
       </div>
 
       <div className="chat-msgs">
@@ -974,10 +905,6 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
             <div style={{ fontSize:40, marginBottom:10 }}>{p.icon}</div>
             <div style={{ fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:800, color:C.text, marginBottom:6 }}>{agent.name}</div>
             <div style={{ fontSize:12, maxWidth:360, margin:"0 auto", lineHeight:1.8 }}>{agent.description || "Ready to assist. Send a message to begin."}</div>
-            <div style={{ marginTop:16, fontSize:11, color:C.dim }}>
-              Provider: <span style={{ color:PROVIDERS[agent.primary_provider]?.color }}>{PROVIDERS[agent.primary_provider]?.logo} {agent.primary_provider}</span>
-              {agent.fallback_provider && <> · Fallback: <span style={{ color:PROVIDERS[agent.fallback_provider]?.color }}>{agent.fallback_provider}</span></>}
-            </div>
           </div>
         )}
         {msgs.map((m, i) => (
@@ -999,7 +926,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
       </div>
 
       <div className="chat-input-row">
-        <textarea ref={inputRef} className="chat-input" rows={2} value={input}
+        <textarea className="chat-input" rows={2} value={input}
           placeholder={`Message ${agent.name}… (Enter to send, Shift+Enter for new line)`}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
@@ -1011,7 +938,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
   );
 }
 
-// ─── RUN HISTORY PAGE ──────────────────────────────────────────────────────
+// ─── RUN HISTORY PAGE ─────────────────────────────────────────
 function RunHistoryPage({ runs, agents }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -1041,14 +968,11 @@ function RunHistoryPage({ runs, agents }) {
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr>
-                <th>Agent</th><th>Provider</th><th>Model</th><th>Status</th><th>Tokens</th><th>Latency</th><th>Time</th>
-              </tr>
+              <tr><th>Agent</th><th>Provider</th><th>Model</th><th>Status</th><th>Tokens</th><th>Latency</th><th>Time</th></tr>
             </thead>
             <tbody>
               {filtered.slice(0,100).map(r => {
                 const agent = agents.find(a=>a.id===r.agent_id);
-                const p = PROVIDERS[r.provider_used] || { label:r.provider_used, color:C.muted, logo:"?" };
                 return (
                   <tr key={r.id}>
                     <td>
@@ -1077,7 +1001,7 @@ function RunHistoryPage({ runs, agents }) {
   );
 }
 
-// ─── API KEYS PAGE ─────────────────────────────────────────────────────────
+// ─── API KEYS PAGE ────────────────────────────────────────────
 function ApiKeysPage() {
   const [keys, setKeys] = useState(() => {
     try { return JSON.parse(localStorage.getItem("agentops_keys")||"{}"); } catch { return {}; }
@@ -1106,7 +1030,7 @@ function ApiKeysPage() {
   return (
     <div className="slide-in" style={{ maxWidth:700 }}>
       <div style={{ background:C.yellow+"12", border:`1px solid ${C.yellow}30`, borderRadius:9, padding:"11px 14px", marginBottom:18, fontSize:12, color:C.yellow, lineHeight:1.6 }}>
-        ⚠ API keys are stored locally in your browser for development. For production, set them as environment variables on your server.
+        ⚠ API keys are stored locally in your browser for development. For production, set them as environment variables on your server (ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.).
       </div>
       {keyDefs.map(k => (
         <div key={k.id} className="key-card">
@@ -1121,7 +1045,7 @@ function ApiKeysPage() {
               onChange={e=>setKeys(p=>({...p,[k.id]:e.target.value}))}
             />
           </div>
-          <button className="icon-btn" onClick={()=>setShow(s=>({...s,[k.id]:!s[k.id]}))} title={show[k.id]?"Hide":"Show"}>
+          <button className="icon-btn" onClick={()=>setShow(s=>({...s,[k.id]:!s[k.id]}))}>
             {show[k.id]?"🙈":"👁"}
           </button>
         </div>
@@ -1132,28 +1056,11 @@ function ApiKeysPage() {
           {saved ? "✓ Saved!" : "Save Keys"}
         </button>
       </div>
-      <div className="card" style={{ padding:16, marginTop:20 }}>
-        <div className="section-title">◎ Connection Status</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-          {Object.entries(PROVIDERS).map(([k,p]) => {
-            const hasKey = !!keys[k.toUpperCase()+"_API_KEY"]||k==="custom";
-            return (
-              <div key={k} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:C.surface, borderRadius:7, border:`1px solid ${C.border}` }}>
-                <span style={{ color:p.color, fontSize:14 }}>{p.logo}</span>
-                <span style={{ flex:1, fontWeight:500 }}>{p.label}</span>
-                <span style={{ fontSize:10, color:hasKey?C.green:C.dim, background:(hasKey?C.green:C.dim)+"15", padding:"2px 8px", borderRadius:4, fontFamily:"'JetBrains Mono',monospace" }}>
-                  {hasKey?"KEY SET":"NO KEY"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }
 
-// ─── DATABASE PAGE ─────────────────────────────────────────────────────────
+// ─── DATABASE PAGE ────────────────────────────────────────────
 function DatabasePage({ agents, skills, runs }) {
   const tables = [
     { name:"agents", icon:"⬡", count:agents.length, color:C.accent,
@@ -1211,7 +1118,7 @@ function DatabasePage({ agents, skills, runs }) {
   );
 }
 
-// ─── ROOT APP ─────────────────────────────────────────────────────────────
+// ─── ROOT APP ─────────────────────────────────────────────────
 const NAV = [
   { id:"command",   icon:"◎", label:"Command Center", group:"main" },
   { id:"agents",    icon:"⬡", label:"Agents",         group:"main", countKey:"agents" },
@@ -1222,6 +1129,8 @@ const NAV = [
   { id:"apikeys",   icon:"🔑", label:"API Keys",        group:"data" },
 ];
 
+const SUPA_URL = import.meta.env.VITE_SUPABASE_URL || "";
+
 export default function App() {
   const [page, setPage] = useState("command");
   const [agents, setAgents] = useState([]);
@@ -1229,29 +1138,27 @@ export default function App() {
   const [runs, setRuns] = useState([]);
   const [chatAgent, setChatAgent] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [providerStatus, setProviderStatus] = useState({ claude:false, gemini:false, deepseek:false });
 
   const loadData = async () => {
     setLoading(true);
-    const [a, s, r] = await Promise.all([
-      supa.get("agents", "order=created_at.asc"),
-      supa.get("skills", "order=created_at.asc"),
-      supa.get("agent_runs", "order=started_at.desc&limit=200"),
+    const [{ data: agentData }, { data: skillData }, { data: runData }] = await Promise.all([
+      db.agents.list(),
+      db.skills.list(),
+      db.runs.list(200),
     ]);
-    const agentArr = Array.isArray(a)?a:[];
-    const skillArr = Array.isArray(s)?s:[];
-    const runArr = Array.isArray(r)?r:[];
+    const agentArr = agentData || [];
+    const skillArr = skillData || [];
+    const runArr = runData || [];
     setAgents(agentArr);
     setSkills(skillArr);
     setRuns(runArr);
-    if (!chatAgent && agentArr.length>0) setChatAgent(agentArr[0]);
+    if (!chatAgent && agentArr.length > 0) setChatAgent(agentArr[0]);
     setLoading(false);
   };
 
   useEffect(() => { loadData(); }, []);
 
   const goChat = (agent) => { setChatAgent(agent); setPage("chat"); };
-
   const counts = { agents:agents.length, skills:skills.length, runs:runs.length };
 
   return (
@@ -1260,7 +1167,6 @@ export default function App() {
       <div className="app">
         <div className="nebula" />
 
-        {/* SIDEBAR */}
         <div className="sidebar">
           <div className="logo-wrap">
             <div className="logo-hex">⬡</div>
@@ -1317,7 +1223,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* MAIN */}
         <div className="main">
           <div className="topbar">
             <div style={{ display:"flex", alignItems:"center" }}>
