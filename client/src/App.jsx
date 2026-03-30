@@ -85,6 +85,11 @@ async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
     { role: "user", content: userMessage },
   ];
 
+  // Read locally-stored API keys and forward them so the server can use them
+  // when environment variables are not set (e.g. Vercel preview without env vars).
+  let clientKeys = {};
+  try { clientKeys = JSON.parse(localStorage.getItem("agentops_keys") || "{}"); } catch {}
+
   const r = await fetch(AI_PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -98,6 +103,7 @@ async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
       temperature: agent.temperature || 0.7,
       fallback_provider: agent.fallback_provider || null,
       fallback_model: agent.fallback_model || null,
+      client_keys: clientKeys,  // forward browser-stored keys to server
     }),
   });
   const data = await r.json();
@@ -1389,7 +1395,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
       const r = await fetch("/api/pipeline", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name }),
+        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name, client_keys: (() => { try { return JSON.parse(localStorage.getItem("agentops_keys")||"{}"); } catch { return {}; } })() }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || `Pipeline error ${r.status}`);

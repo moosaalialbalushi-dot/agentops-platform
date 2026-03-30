@@ -212,7 +212,24 @@ export default async function handler(req: any, res: any) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { steps, input, skill_name } = req.body || {};
+  const { steps, input, skill_name, client_keys = {} } = req.body || {};
+
+  // Merge client-provided keys into process.env (server env vars take priority)
+  const keyMap: Record<string, string> = {
+    ANTHROPIC_API_KEY: "ANTHROPIC_API_KEY",
+    GEMINI_API_KEY: "GEMINI_API_KEY",
+    OPENAI_API_KEY: "OPENAI_API_KEY",
+    DEEPSEEK_API_KEY: "DEEPSEEK_API_KEY",
+    GROQ_API_KEY: "GROQ_API_KEY",
+    OPENROUTER_API_KEY: "OPENROUTER_API_KEY",
+  };
+  if (client_keys && typeof client_keys === "object") {
+    for (const [clientKey, envKey] of Object.entries(keyMap)) {
+      if (!process.env[envKey] && (client_keys as any)[clientKey]) {
+        process.env[envKey] = (client_keys as any)[clientKey];
+      }
+    }
+  }
 
   if (!input) return res.status(400).json({ error: "Missing required field: input" });
   if (!steps || !Array.isArray(steps) || steps.length === 0)
