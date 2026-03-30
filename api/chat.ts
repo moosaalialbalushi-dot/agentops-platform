@@ -168,16 +168,9 @@ async function callGroq({ model, system_prompt, messages, max_tokens, temperatur
 
 async function callOpenRouter({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY not set. Get your key at https://openrouter.ai/keys");
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not set. Set it in Vercel → Settings → Environment Variables.");
 
-  // Block paid models — only allow models ending in ":free"
   const selectedModel = model || "qwen/qwen-2.5-72b-instruct:free";
-  if (!selectedModel.endsWith(":free")) {
-    throw new Error(
-      `⚠ Paid model blocked: "${selectedModel}" would consume your OpenRouter credits. ` +
-      `Please select a free model (models ending in ":free") or switch to a different provider.`
-    );
-  }
 
   const start = Date.now();
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -205,6 +198,63 @@ async function callOpenRouter({ model, system_prompt, messages, max_tokens, temp
   return {
     response: data.choices?.[0]?.message?.content || "",
     tokens_used: data.usage?.total_tokens || 0,
+    latency_ms: Date.now() - start,
+  };
+}
+
+// ─── Veo — Google video generation via Gemini API key ────────────────────────
+// Veo uses a long-running operation pattern; we poll for up to 55 s.
+
+async function callVeo(params: ProviderParams) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set (required for Veo video generation)");
+
+  const videoModel = params.model || "veo-2.0-generate-001";
+  const prompt = params.messages[params.messages.length - 1]?.content || "";
+  const start = Date.now();
+
+  // 1 – Initiate generation (long-running operation)
+  const initUrl = `https://generativelanguage.googleapis.com/v1beta/models/${videoModel}:predictLongRunning?key=${apiKey}`;
+  const initRes = await fetch(initUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { aspectRatio: "16:9", sampleCount: 1 },
+    }),
+  });
+  const initData = await initRes.json();
+  if (!initRes.ok) throw new Error(initData?.error?.message || `Veo init error ${initRes.status}`);
+
+  const operationName = initData.name;
+  if (!operationName) throw new Error("Veo did not return an operation name");
+
+  // 2 – Poll until done (max ~50 s to stay under Vercel 60 s limit)
+  const pollUrl = `https://generativelanguage.googleapis.com/v1beta/${operationName}?key=${apiKey}`;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise(r => setTimeout(r, 5000)); // wait 5 s
+    const pollRes = await fetch(pollUrl);
+    const pollData = await pollRes.json();
+    if (pollData.done) {
+      const video = pollData.response?.predictions?.[0];
+      const videoUri = video?.videoMetadata?.video?.uri || video?.videoUri || "";
+      const b64 = video?.bytesBase64Encoded || "";
+      const mime = video?.mimeType || "video/mp4";
+      const dataUrl = b64 ? `data:${mime};base64,${b64}` : videoUri;
+      return {
+        response: dataUrl || `✓ Video generated (operation: ${operationName})`,
+        tokens_used: 0,
+        latency_ms: Date.now() - start,
+        is_video: true,
+      };
+    }
+    if (pollData.error) throw new Error(pollData.error.message || "Veo generation failed");
+  }
+
+  // Timed out — return operation name so user can check later
+  return {
+    response: `⏳ Video generation is still processing. Operation ID: \`${operationName}\`\nThis typically takes 1–3 minutes. Veo 2 is generating your video in the background.`,
+    tokens_used: 0,
     latency_ms: Date.now() - start,
   };
 }
@@ -282,7 +332,8 @@ async function callProvider(provider: string, params: ProviderParams) {
     case "openrouter":  return callOpenRouter(params);
     case "notebooklm":  return callNotebookLM(params);
     case "imagen":      return callImagen(params);
-    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, notebooklm, imagen`);
+    case "veo":         return callVeo(params);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, notebooklm, imagen, veo`);
   }
 }
 
@@ -306,30 +357,7 @@ export default async function handler(req: any, res: any) {
     temperature,
     fallback_provider,
     fallback_model,
-    client_keys = {}, // API keys forwarded from the browser's localStorage
   } = req.body || {};
-
-  // Merge client-provided keys into process.env so all provider callers pick them up.
-  // Server env vars take priority; client keys are only used when env var is absent.
-  const keyMap: Record<string, string> = {
-    ANTHROPIC_API_KEY:  "ANTHROPIC_API_KEY",
-    GEMINI_API_KEY:     "GEMINI_API_KEY",
-    OPENAI_API_KEY:     "OPENAI_API_KEY",
-    DEEPSEEK_API_KEY:   "DEEPSEEK_API_KEY",
-    GROQ_API_KEY:       "GROQ_API_KEY",
-    OPENROUTER_API_KEY: "OPENROUTER_API_KEY",
-    MISTRAL_API_KEY:    "MISTRAL_API_KEY",
-    COHERE_API_KEY:     "COHERE_API_KEY",
-    CUSTOM_API_KEY:     "CUSTOM_API_KEY",
-    CUSTOM_API_URL:     "CUSTOM_API_URL",
-  };
-  if (client_keys && typeof client_keys === "object") {
-    for (const [clientKey, envKey] of Object.entries(keyMap)) {
-      if (!process.env[envKey] && (client_keys as any)[clientKey]) {
-        process.env[envKey] = (client_keys as any)[clientKey];
-      }
-    }
-  }
 
   if (!provider) return res.status(400).json({ error: "Missing required field: provider" });
   if (!message && (!messages || messages.length === 0))

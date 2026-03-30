@@ -85,11 +85,6 @@ async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
     { role: "user", content: userMessage },
   ];
 
-  // Read locally-stored API keys and forward them so the server can use them
-  // when environment variables are not set (e.g. Vercel preview without env vars).
-  let clientKeys = {};
-  try { clientKeys = JSON.parse(localStorage.getItem("agentops_keys") || "{}"); } catch {}
-
   const r = await fetch(AI_PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -103,7 +98,6 @@ async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
       temperature: agent.temperature || 0.7,
       fallback_provider: agent.fallback_provider || null,
       fallback_model: agent.fallback_model || null,
-      client_keys: clientKeys,  // forward browser-stored keys to server
     }),
   });
   const data = await r.json();
@@ -153,6 +147,7 @@ const PROVIDERS = {
   openrouter:  { label: "OpenRouter",  color: "#7c3aed", logo: "⊛" },
   notebooklm:  { label: "NotebookLM",  color: "#1a73e8", logo: "⊞" },
   imagen:      { label: "Imagen",      color: "#34a853", logo: "⬡" },
+  veo:         { label: "Veo (Video)", color: "#0f9d58", logo: "▶" },
   custom:      { label: "Custom",      color: "#8b5cf6", logo: "✳" },
 };
 
@@ -200,21 +195,28 @@ const MODELS_BY_PROVIDER = {
     "mixtral-8x7b-32768",
   ],
   openrouter: [
-    // All free — no cost, no credits deducted (rate-limited only)
-    "qwen/qwen-2.5-72b-instruct:free",
-    "qwen/qwen-2.5-7b-instruct:free",
-    "qwen/qwq-32b:free",
+    // Free tier (no credits deducted, rate-limited)
     "qwen/qwen3-235b-a22b:free",
+    "qwen/qwq-32b:free",
+    "qwen/qwen-2.5-72b-instruct:free",
     "meta-llama/llama-3.3-70b-instruct:free",
-    "meta-llama/llama-3.1-8b-instruct:free",
     "meta-llama/llama-3.2-11b-vision-instruct:free",
     "deepseek/deepseek-r1:free",
     "deepseek/deepseek-chat-v3-0324:free",
     "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
     "mistralai/mistral-7b-instruct:free",
     "microsoft/phi-4:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
+    // Paid — billed per token via your OpenRouter credits
+    "anthropic/claude-opus-4",
+    "anthropic/claude-sonnet-4-5",
+    "google/gemini-2.5-pro-preview",
+    "openai/gpt-4.1",
+    "openai/o3",
+    "meta-llama/llama-3.1-405b-instruct",
+    "mistralai/mistral-large",
+    "cohere/command-r-plus",
+    "x-ai/grok-3",
+    "perplexity/sonar-pro",
   ],
   notebooklm: [
     "notebooklm-research",
@@ -226,6 +228,9 @@ const MODELS_BY_PROVIDER = {
   imagen:     [
     "imagen-3.0-generate-002",
     "imagen-3.0-fast-generate-001",
+  ],
+  veo:        [
+    "veo-2.0-generate-001",
   ],
   custom:     ["custom-model"],
 };
@@ -1395,7 +1400,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
       const r = await fetch("/api/pipeline", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name, client_keys: (() => { try { return JSON.parse(localStorage.getItem("agentops_keys")||"{}"); } catch { return {}; } })() }),
+        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name }),
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data?.error || `Pipeline error ${r.status}`);
@@ -1640,77 +1645,89 @@ function RunHistoryPage({ runs, agents }) {
 }
 
 // ─── API KEYS PAGE ─────────────────────────────────────────────────────────
-function ApiKeysPage() {
-  const [keys, setKeys] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("agentops_keys")||"{}"); } catch { return {}; }
-  });
-  const [show, setShow] = useState({});
-  const [saved, setSaved] = useState(false);
+const ENV_KEY_DEFS = [
+  { env:"ANTHROPIC_API_KEY",  provider:"claude",     label:"Claude (Anthropic)", logo:"◆", color:"#d97706", hint:"sk-ant-api03-...", where:"console.anthropic.com → API Keys" },
+  { env:"GEMINI_API_KEY",     provider:"gemini",     label:"Google Gemini / Imagen / NotebookLM / Veo", logo:"✦", color:"#4285f4", hint:"AIzaSy...", where:"aistudio.google.com → Get API key" },
+  { env:"OPENROUTER_API_KEY", provider:"openrouter", label:"OpenRouter (300+ models, free + paid)", logo:"⊛", color:"#7c3aed", hint:"sk-or-v1-...", where:"openrouter.ai/keys" },
+  { env:"DEEPSEEK_API_KEY",   provider:"deepseek",   label:"DeepSeek", logo:"◉", color:"#10b981", hint:"sk-...", where:"platform.deepseek.com → API keys" },
+  { env:"OPENAI_API_KEY",     provider:"openai",     label:"OpenAI (GPT-4, o3, DALL-E)", logo:"⊕", color:"#74aa9c", hint:"sk-proj-...", where:"platform.openai.com/api-keys" },
+  { env:"GROQ_API_KEY",       provider:"groq",       label:"Groq (ultra-fast Llama / Mixtral)", logo:"◧", color:"#f55036", hint:"gsk_...", where:"console.groq.com/keys" },
+  { env:"MISTRAL_API_KEY",    provider:"mistral",    label:"Mistral AI", logo:"◐", color:"#ff7000", hint:"...", where:"console.mistral.ai/api-keys" },
+  { env:"COHERE_API_KEY",     provider:"cohere",     label:"Cohere", logo:"◑", color:"#39594d", hint:"...", where:"dashboard.cohere.com/api-keys" },
+  { env:"CUSTOM_API_KEY",     provider:"custom",     label:"Custom Provider", logo:"✳", color:"#8b5cf6", hint:"your key", where:"Your provider's dashboard" },
+  { env:"CUSTOM_API_URL",     provider:"custom",     label:"Custom API Base URL", logo:"🌐", color:"#64748b", hint:"https://...", where:"Your provider's docs" },
+];
 
-  const saveKeys = () => {
-    localStorage.setItem("agentops_keys", JSON.stringify(keys));
-    setSaved(true);
-    setTimeout(()=>setSaved(false), 2000);
+function ApiKeysPage() {
+  const [status, setStatus] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const checkStatus = async () => {
+    setChecking(true);
+    try {
+      const r = await fetch("/api/status");
+      const data = await r.json();
+      setStatus(data.providers || {});
+    } catch {
+      setStatus({});
+    } finally { setChecking(false); }
   };
 
-  const keyDefs = [
-    { id:"ANTHROPIC_API_KEY",  label:"Claude (Anthropic)", logo:"◆", color:"#d97706", hint:"sk-ant-..." },
-    { id:"GEMINI_API_KEY",     label:"Google Gemini",      logo:"✦", color:"#4285f4", hint:"AI..." },
-    { id:"DEEPSEEK_API_KEY",   label:"DeepSeek",           logo:"◉", color:"#10b981", hint:"sk-..." },
-    { id:"OPENAI_API_KEY",     label:"OpenAI",             logo:"⊕", color:"#74aa9c", hint:"sk-..." },
-    { id:"MISTRAL_API_KEY",    label:"Mistral AI",         logo:"◐", color:"#ff7000", hint:"..." },
-    { id:"GROQ_API_KEY",        label:"Groq",               logo:"◧", color:"#f55036", hint:"gsk_..." },
-    { id:"COHERE_API_KEY",      label:"Cohere",             logo:"◑", color:"#39594d", hint:"..." },
-    { id:"OPENROUTER_API_KEY",  label:"OpenRouter (300+ models, free tiers)", logo:"⊛", color:"#7c3aed", hint:"sk-or-..." },
-    { id:"CUSTOM_API_KEY",      label:"Custom Provider",    logo:"✳", color:"#8b5cf6", hint:"your key..." },
-    { id:"CUSTOM_API_URL",     label:"Custom API URL",     logo:"🌐", color:"#64748b", hint:"https://..." },
-  ];
-
   return (
-    <div className="slide-in" style={{ maxWidth:700 }}>
-      <div style={{ background:C.yellow+"12", border:`1px solid ${C.yellow}30`, borderRadius:9, padding:"11px 14px", marginBottom:18, fontSize:12, color:C.yellow, lineHeight:1.6 }}>
-        ⚠ API keys are stored locally in your browser for development. For production, set them as environment variables on your server.
+    <div className="slide-in" style={{ maxWidth:720 }}>
+      {/* How-to banner */}
+      <div style={{ background:C.accent+"12", border:`1px solid ${C.accent}30`, borderRadius:10, padding:"14px 16px", marginBottom:22 }}>
+        <div style={{ fontWeight:700, fontSize:13, marginBottom:8, color:C.accentHi }}>⚙ How to configure API keys</div>
+        <ol style={{ paddingLeft:18, fontSize:12, lineHeight:2, color:C.text }}>
+          <li>Open your <strong>Vercel Dashboard</strong> → select the <em>agentops-platform</em> project</li>
+          <li>Go to <strong>Settings → Environment Variables</strong></li>
+          <li>Add each key using the exact variable name shown below</li>
+          <li>Click <strong>Save</strong>, then <strong>Redeploy</strong> the project for changes to take effect</li>
+        </ol>
       </div>
-      {keyDefs.map(k => (
-        <div key={k.id} className="key-card">
-          <div className="key-logo" style={{ background:k.color+"18", color:k.color, border:`1px solid ${k.color}30` }}>{k.logo}</div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:600, fontSize:12, marginBottom:5 }}>{k.label}</div>
-            <input
-              className="key-field"
-              type={show[k.id]?"text":"password"}
-              placeholder={k.hint}
-              value={keys[k.id]||""}
-              onChange={e=>setKeys(p=>({...p,[k.id]:e.target.value}))}
-            />
+
+      {/* Key reference table */}
+      <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
+        {ENV_KEY_DEFS.map(k => (
+          <div key={k.env} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:9, padding:"12px 14px", display:"flex", alignItems:"flex-start", gap:12 }}>
+            <div style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:k.color+"18", color:k.color, border:`1px solid ${k.color}30`, borderRadius:8, fontSize:15, flexShrink:0 }}>{k.logo}</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontWeight:600, fontSize:12, marginBottom:3 }}>{k.label}</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:C.cyan, background:C.surface, padding:"3px 8px", borderRadius:5, display:"inline-block", marginBottom:4 }}>{k.env}</div>
+              <div style={{ fontSize:11, color:C.muted }}>Get it at: <span style={{ color:C.text }}>{k.where}</span></div>
+            </div>
+            {status && (
+              <span style={{ fontSize:10, color:status[k.provider]?C.green:C.dim, background:(status[k.provider]?C.green:C.dim)+"15", padding:"3px 9px", borderRadius:4, fontFamily:"'JetBrains Mono',monospace", flexShrink:0, alignSelf:"center" }}>
+                {status[k.provider] ? "✓ SET" : "NOT SET"}
+              </span>
+            )}
           </div>
-          <button className="icon-btn" onClick={()=>setShow(s=>({...s,[k.id]:!s[k.id]}))} title={show[k.id]?"Hide":"Show"}>
-            {show[k.id]?"🙈":"👁"}
+        ))}
+      </div>
+
+      {/* Status checker */}
+      <div className="card" style={{ padding:16 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: status ? 14 : 0 }}>
+          <div style={{ fontWeight:700, fontSize:12 }}>◎ Live Connection Status</div>
+          <button className="btn btn-primary" onClick={checkStatus} disabled={checking} style={{ fontSize:11, padding:"5px 14px" }}>
+            {checking ? "Checking…" : "Check Now"}
           </button>
         </div>
-      ))}
-      <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:6 }}>
-        <button className="btn btn-ghost" onClick={()=>setKeys({})}>Clear All</button>
-        <button className={`btn ${saved?"btn-success":"btn-primary"}`} onClick={saveKeys}>
-          {saved ? "✓ Saved!" : "Save Keys"}
-        </button>
-      </div>
-      <div className="card" style={{ padding:16, marginTop:20 }}>
-        <div className="section-title">◎ Connection Status</div>
-        <div style={{ display:"flex", flexDirection:"column", gap:7 }}>
-          {Object.entries(PROVIDERS).map(([k,p]) => {
-            const hasKey = !!keys[k.toUpperCase()+"_API_KEY"]||k==="custom";
-            return (
-              <div key={k} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 12px", background:C.surface, borderRadius:7, border:`1px solid ${C.border}` }}>
-                <span style={{ color:p.color, fontSize:14 }}>{p.logo}</span>
-                <span style={{ flex:1, fontWeight:500 }}>{p.label}</span>
-                <span style={{ fontSize:10, color:hasKey?C.green:C.dim, background:(hasKey?C.green:C.dim)+"15", padding:"2px 8px", borderRadius:4, fontFamily:"'JetBrains Mono',monospace" }}>
-                  {hasKey?"KEY SET":"NO KEY"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
+        {status && (
+          <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+            {Object.entries(PROVIDERS).map(([k,p]) => {
+              const isSet = !!status[k];
+              return (
+                <div key={k} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 10px", background:C.surface, borderRadius:7, border:`1px solid ${isSet?C.green+"40":C.border}` }}>
+                  <span style={{ color:p.color, fontSize:12 }}>{p.logo}</span>
+                  <span style={{ fontSize:11, fontWeight:500 }}>{p.label}</span>
+                  <span style={{ fontSize:10, color:isSet?C.green:C.dim, fontFamily:"'JetBrains Mono',monospace" }}>{isSet?"ON":"OFF"}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {!status && <div style={{ fontSize:12, color:C.muted }}>Click "Check Now" to verify which providers are configured on the server.</div>}
       </div>
     </div>
   );
