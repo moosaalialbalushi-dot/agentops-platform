@@ -131,9 +131,18 @@ async function callNotebookLM(model: string, userContent: string, maxTokens = 40
   return callGemini(geminiModel, systemPrompt, [{ role: "user", content: userContent }], maxTokens, 0.4);
 }
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface StepResult {
+  text: string;
+  tokens: number;
+  latency_ms: number;
+  isImage?: boolean;
+}
+
 // ─── Step executor ───────────────────────────────────────────────────────────
 
-async function executeStep(step: any, input: string, prevOutput: string) {
+async function executeStep(step: any, input: string, prevOutput: string): Promise<StepResult> {
   const prompt = (step.prompt_template || "{{input}}")
     .replace(/\{\{input\}\}/g, input)
     .replace(/\{\{prev\}\}/g, prevOutput || input);
