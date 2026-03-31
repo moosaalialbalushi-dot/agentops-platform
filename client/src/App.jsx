@@ -1,19 +1,99 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase, db } from "@/lib/supabase";
 
-// ─── CONFIG ───────────────────────────────────────────────────
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+// Supabase anon key is a publishable key — safe to ship in client bundles.
+// Override with VITE_SUPABASE_URL / VITE_SUPABASE_KEY env vars if needed.
+const SUPA_URL  = import.meta.env.VITE_SUPABASE_URL  || "https://cnliqngeufcdsypuimog.supabase.co";
+const SUPA_KEY  = import.meta.env.VITE_SUPABASE_KEY  || import.meta.env.VITE_SUPABASE_ANON_KEY
+                 || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubGlxbmdldWZjZHN5cHVpbW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNTk1MTksImV4cCI6MjA4ODgzNTUxOX0.dKnMsDxcwQZATCsVO7EVKluCh9MpRRipuSl1B_JCNO0";
 const AI_PROXY_URL = "/api/chat";
 
-// ─── MULTI-AI ROUTER ──────────────────────────────────────────
-async function routeToAI(agent, userMessage) {
+// ─── AUDIT LOG ──────────────────────────────────────────────────────────────
+// Dispatches events picked up by ToastProvider and AuditLogPage anywhere in tree
+function auditLog(op, table, status, detail = "") {
+  window.dispatchEvent(new CustomEvent("agentops_audit", {
+    detail: { id: Date.now() + Math.random(), op, table, status, detail, ts: new Date().toISOString() }
+  }));
+}
+
+// ─── SUPABASE CLIENT ────────────────────────────────────────────────────────
+const supa = {
+  headers: { "Content-Type": "application/json", "apikey": SUPA_KEY, "Authorization": `Bearer ${SUPA_KEY}` },
+  async get(table, params = "") {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}`, { headers: this.headers });
+      const data = await r.json();
+      if (!r.ok) { auditLog("LOAD", table, "error", data?.message || `HTTP ${r.status}`); return []; }
+      return Array.isArray(data) ? data : [];
+    } catch (e) { auditLog("LOAD", table, "error", e.message); return []; }
+  },
+  async post(table, body) {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
+        method: "POST", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      if (r.ok) auditLog("SAVE", table, "success", `Record created`);
+      else auditLog("SAVE", table, "error", data?.message || `HTTP ${r.status}`);
+      return data;
+    } catch (e) { auditLog("SAVE", table, "error", e.message); return []; }
+  },
+  async patch(table, id, body) {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
+        method: "PATCH", headers: { ...this.headers, "Prefer": "return=representation" }, body: JSON.stringify(body)
+      });
+      const data = await r.json();
+      if (r.ok) auditLog("UPDATE", table, "success", `Record updated`);
+      else auditLog("UPDATE", table, "error", data?.message || `HTTP ${r.status}`);
+      return data;
+    } catch (e) { auditLog("UPDATE", table, "error", e.message); return []; }
+  },
+  async delete(table, id) {
+    try {
+      const r = await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, { method: "DELETE", headers: this.headers });
+      if (r.ok) auditLog("DELETE", table, "success", `Record removed`);
+      else auditLog("DELETE", table, "error", `HTTP ${r.status}`);
+    } catch (e) { auditLog("DELETE", table, "error", e.message); }
+  },
+};
+
+// ─── MULTI-AI ROUTER ───────────────────────────────────────────────────────
+// history: array of past {role:"user"|"agent", text} messages (excludes current userMessage)
+// agentSkills: array of skill objects attached to this agent
+async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
+  // Build system prompt: agent's own prompt + skills context + general fallback
+  let systemPrompt = agent.system_prompt || "You are a helpful AI agent.";
+
+  // Append active skills as context if any are attached
+  const activeSkills = agentSkills.filter(s => s.is_active !== false);
+  if (activeSkills.length > 0) {
+    const skillsContext = activeSkills.map(s =>
+      `- ${s.name} (${s.identifier}): ${s.description || "No description"}`
+    ).join("\n");
+    systemPrompt += `\n\n## Available Skills\nYou have access to the following capabilities:\n${skillsContext}`;
+  }
+
+  // Always add general-purpose fallback so the agent never refuses off-topic questions
+  systemPrompt += `\n\n## General Assistant Behavior\nYou are also a general-purpose AI assistant. If a user's question is outside your primary specialty or cannot be addressed by your defined skills, still respond helpfully using your broad knowledge. Never refuse to help just because a topic seems off-topic. If you lack a specific skill to complete a task, explain what you can do and suggest alternatives or ask the user for more context.`;
+
+  // Build full conversation history for multi-turn chat
+  const messages = [
+    ...history
+      .filter(m => m.role === "user" || m.role === "agent")
+      .map(m => ({ role: m.role === "agent" ? "assistant" : "user", content: m.text })),
+    { role: "user", content: userMessage },
+  ];
+
   const r = await fetch(AI_PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       provider: agent.primary_provider,
       model: agent.primary_model,
-      system_prompt: agent.system_prompt || "You are a helpful AI agent.",
-      message: userMessage,
+      system_prompt: systemPrompt,
+      messages,           // full conversation history
+      message: userMessage, // kept for backwards compat
       max_tokens: agent.max_tokens || 1000,
       temperature: agent.temperature || 0.7,
       fallback_provider: agent.fallback_provider || null,
@@ -22,34 +102,24 @@ async function routeToAI(agent, userMessage) {
   });
   const data = await r.json();
   if (!r.ok) throw new Error(data?.error || `API error ${r.status}`);
-
   const { response, provider_used, model_used, fallback_triggered, latency_ms, tokens_used } = data;
-
-  // Log run to Supabase
   try {
-    await db.runs.create({
-      agent_id: agent.id,
-      provider_used,
-      model_used,
-      prompt: userMessage.slice(0, 500),
-      response: response.slice(0, 2000),
-      status: "completed",
-      tokens_used: tokens_used || 0,
-      latency_ms: latency_ms || 0,
-      fallback_triggered,
-      ended_at: new Date().toISOString(),
+    await supa.post("agent_runs", {
+      agent_id: agent.id, provider_used, model_used,
+      prompt: userMessage.slice(0, 500), response: response.slice(0, 2000),
+      status: "completed", tokens_used: tokens_used || 0, latency_ms: latency_ms || 0,
+      fallback_triggered, ended_at: new Date().toISOString(),
     });
-    await db.agents.update(agent.id, {
+    await supa.patch("agents", agent.id, {
       total_runs: (agent.total_runs || 0) + 1,
       total_tokens: (agent.total_tokens || 0) + (tokens_used || 0),
+      updated_at: new Date().toISOString(),
     });
-  } catch (e) {
-    console.error("Failed to log run:", e);
-  }
+  } catch (e) {}
   return data;
 }
 
-// ─── DESIGN TOKENS ────────────────────────────────────────────
+// ─── DESIGN TOKENS ────────────────────────────────────────────────────────
 const C = {
   bg: "#05070d", surface: "#0a0d16", card: "#0f1420", border: "#1a2035",
   borderHi: "#2a3550", accent: "#6366f1", accentHi: "#818cf8",
@@ -67,25 +137,102 @@ const PERSONAS = {
 };
 
 const PROVIDERS = {
-  claude:   { label: "Claude",   color: "#d97706", logo: "◆" },
-  gemini:   { label: "Gemini",   color: "#4285f4", logo: "✦" },
-  deepseek: { label: "DeepSeek", color: "#10b981", logo: "◉" },
-  openai:   { label: "OpenAI",   color: "#74aa9c", logo: "⊕" },
-  mistral:  { label: "Mistral",  color: "#ff7000", logo: "◐" },
-  cohere:   { label: "Cohere",   color: "#39594d", logo: "◑" },
-  groq:     { label: "Groq",     color: "#f55036", logo: "◧" },
-  custom:   { label: "Custom",   color: "#8b5cf6", logo: "✳" },
+  claude:      { label: "Claude",      color: "#d97706", logo: "◆" },
+  gemini:      { label: "Gemini",      color: "#4285f4", logo: "✦" },
+  deepseek:    { label: "DeepSeek",    color: "#10b981", logo: "◉" },
+  openai:      { label: "OpenAI",      color: "#74aa9c", logo: "⊕" },
+  mistral:     { label: "Mistral",     color: "#ff7000", logo: "◐" },
+  cohere:      { label: "Cohere",      color: "#39594d", logo: "◑" },
+  groq:        { label: "Groq",        color: "#f55036", logo: "◧" },
+  openrouter:  { label: "OpenRouter",  color: "#7c3aed", logo: "⊛" },
+  notebooklm:  { label: "NotebookLM",  color: "#1a73e8", logo: "⊞" },
+  imagen:      { label: "Imagen",      color: "#34a853", logo: "⬡" },
+  veo:         { label: "Veo (Video)", color: "#0f9d58", logo: "▶" },
+  custom:      { label: "Custom",      color: "#8b5cf6", logo: "✳" },
 };
 
 const MODELS_BY_PROVIDER = {
-  claude:   ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022"],
-  gemini:   ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.5-pro"],
-  deepseek: ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
-  openai:   ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "o1", "o1-mini"],
-  mistral:  ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
-  cohere:   ["command-r-plus", "command-r", "command"],
-  groq:     ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-  custom:   ["custom-model"],
+  claude:     [
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-opus-20240229",
+  ],
+  gemini:     [
+    "gemini-2.5-pro-preview-05-06",
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-pro-002",
+    "gemini-1.5-flash-002",
+  ],
+  deepseek:   ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+  openai:     [
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o3",
+    "o3-mini",
+    "o1",
+    "o1-mini",
+  ],
+  mistral:    [
+    "mistral-large-latest",
+    "mistral-small-latest",
+    "codestral-latest",
+    "pixtral-large-latest",
+  ],
+  cohere:     ["command-a-03-2025", "command-r-plus", "command-r"],
+  groq:       [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "qwen-qwq-32b",
+    "mixtral-8x7b-32768",
+  ],
+  openrouter: [
+    // Free tier (no credits deducted, rate-limited)
+    "qwen/qwen3-235b-a22b:free",
+    "qwen/qwq-32b:free",
+    "qwen/qwen-2.5-72b-instruct:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "meta-llama/llama-3.2-11b-vision-instruct:free",
+    "deepseek/deepseek-r1:free",
+    "deepseek/deepseek-chat-v3-0324:free",
+    "google/gemma-3-27b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+    "microsoft/phi-4:free",
+    // Paid — billed per token via your OpenRouter credits
+    "anthropic/claude-opus-4",
+    "anthropic/claude-sonnet-4-5",
+    "google/gemini-2.5-pro-preview",
+    "openai/gpt-4.1",
+    "openai/o3",
+    "meta-llama/llama-3.1-405b-instruct",
+    "mistralai/mistral-large",
+    "cohere/command-r-plus",
+    "x-ai/grok-3",
+    "perplexity/sonar-pro",
+  ],
+  notebooklm: [
+    "notebooklm-research",
+    "notebooklm-slides",
+    "notebooklm-summary",
+    "notebooklm-qa",
+    "notebooklm-podcast",
+  ],
+  imagen:     [
+    "imagen-3.0-generate-002",
+    "imagen-3.0-fast-generate-001",
+  ],
+  veo:        [
+    "veo-2.0-generate-001",
+  ],
+  custom:     ["custom-model"],
 };
 
 const CAT_COLORS = {
@@ -94,7 +241,7 @@ const CAT_COLORS = {
   security: "#ef4444", comms: "#34d399", analysis: "#60a5fa", general: "#94a3b8",
 };
 
-// ─── STYLES ───────────────────────────────────────────────────
+// ─── STYLES ────────────────────────────────────────────────────────────────
 const STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -229,9 +376,36 @@ select.form-input option{background:${C.card}}
 .order-controls{display:flex;flex-direction:column;gap:3px}
 .order-btn{background:none;border:1px solid ${C.border};border-radius:4px;color:${C.dim};cursor:pointer;padding:2px 6px;font-size:10px;line-height:1;transition:all .14s}
 .order-btn:hover{color:${C.text};border-color:${C.borderHi}}
+.pipeline-card{align-self:flex-start;background:${C.card};border:1px solid rgba(167,139,250,.25);border-left:3px solid ${C.purple};border-radius:10px;padding:13px 15px;max-width:96%;width:100%}
+.pipeline-header{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;margin-bottom:11px;color:${C.text}}
+.pipeline-step{background:${C.surface};border:1px solid ${C.border};border-radius:7px;padding:10px 12px;margin-bottom:8px}
+.pipeline-step:last-child{margin-bottom:0}
+.pipeline-step-error{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.04)}
+.pipeline-step-label{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:${C.text};margin-bottom:7px}
+.slides-deck{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.slide-card{background:linear-gradient(135deg,rgba(99,102,241,.08),rgba(167,139,250,.05));border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:14px 16px;position:relative}
+.slide-num{position:absolute;top:8px;right:10px;font-size:9px;color:${C.dim};font-family:'JetBrains Mono',monospace;letter-spacing:.06em}
+.slide-title{font-family:'Syne',sans-serif;font-size:13px;font-weight:800;color:${C.text};margin-bottom:8px}
+.slide-body{font-size:12px;color:${C.muted};line-height:1.75;white-space:pre-wrap}
+.slide-notes{margin-top:9px;padding-top:8px;border-top:1px solid ${C.border};font-size:10px;color:${C.dim};font-style:italic}
+.pipeline-step-output{font-size:12px;color:${C.text};line-height:1.7;white-space:pre-wrap;max-height:320px;overflow-y:auto}
+.toast-stack{position:fixed;bottom:22px;right:22px;z-index:999999;display:flex;flex-direction:column;gap:7px;pointer-events:none}
+.toast{padding:9px 13px;border-radius:9px;font-size:11px;display:flex;gap:8px;align-items:flex-start;backdrop-filter:blur(12px);box-shadow:0 8px 24px rgba(0,0,0,.5);animation:slidein .18s ease;pointer-events:auto;max-width:300px}
+.toast-ok{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.3)}
+.toast-err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3)}
+.file-chips{display:flex;gap:5px;flex-wrap:wrap;padding:6px 18px 0}
+.file-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:5px;font-size:10px;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);color:${C.accentHi};max-width:200px}
+.file-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.connector-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:11px}
+.connector-card{padding:16px;border-radius:10px;background:${C.card};border:1px solid ${C.border};transition:all .2s;border-left:3px solid var(--tc)}
+.connector-card:hover{border-color:var(--tc);transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.enhance-btn{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(167,139,250,.1));border:1px solid rgba(99,102,241,.28);color:${C.accentHi};border-radius:5px;padding:3px 9px;font-size:10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.enhance-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.25),rgba(167,139,250,.18))}
+.enhance-btn:disabled{opacity:.5;cursor:not-allowed}
 `;
 
-// ─── HELPERS ──────────────────────────────────────────────────
+
+// ─── HELPERS ───────────────────────────────────────────────────────────────
 const fmt = n => n >= 1e6 ? (n/1e6).toFixed(2)+"M" : n >= 1e3 ? (n/1e3).toFixed(0)+"k" : String(n||0);
 const relative = iso => { if (!iso) return "—"; const d = (Date.now()-new Date(iso))/1000; if (d<60) return `${~~d}s ago`; if (d<3600) return `${~~(d/60)}m ago`; if (d<86400) return `${~~(d/3600)}h ago`; return `${~~(d/86400)}d ago`; };
 const downloadJSON = (data, filename) => {
@@ -241,7 +415,7 @@ const downloadJSON = (data, filename) => {
   a.click();
 };
 
-// ─── REUSABLE COMPONENTS ──────────────────────────────────────
+// ─── REUSABLE COMPONENTS ───────────────────────────────────────────────────
 function Modal({ title, onClose, children, wide, xl }) {
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -275,21 +449,84 @@ function ProviderBadge({ name }) {
   );
 }
 
-// ─── COMMAND CENTER ───────────────────────────────────────────
+// ─── TOAST PROVIDER ────────────────────────────────────────────────────────
+function ToastProvider() {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    const handler = (e) => {
+      const t = { ...e.detail, _uid: Date.now() + Math.random() };
+      setToasts(p => [t, ...p].slice(0, 5));
+      setTimeout(() => setToasts(p => p.filter(x => x._uid !== t._uid)), 4200);
+    };
+    window.addEventListener("agentops_audit", handler);
+    return () => window.removeEventListener("agentops_audit", handler);
+  }, []);
+  return (
+    <div className="toast-stack">
+      {toasts.map(t => (
+        <div key={t._uid} className={`toast ${t.status === "error" ? "toast-err" : "toast-ok"}`}>
+          <span style={{ color: t.status === "error" ? C.red : C.green, fontSize: 13, flexShrink:0 }}>
+            {t.status === "error" ? "⚠" : "✓"}
+          </span>
+          <div>
+            <div style={{ fontWeight:700, color:C.text }}>{t.op} {t.table}</div>
+            {t.detail && <div style={{ color:C.muted, fontSize:10, marginTop:2 }}>{t.detail}</div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── PROMPT ENHANCER ───────────────────────────────────────────────────────
+function PromptEnhancer({ value, onChange, context = "AI prompt", compact = false }) {
+  const [loading, setLoading] = useState(false);
+  const enhance = async () => {
+    if (!value?.trim() || loading) return;
+    setLoading(true);
+    try {
+      const r = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "claude", model: "claude-sonnet-4-6",
+          system_prompt: "You are a prompt engineering expert. Rewrite the provided text into a highly effective, clear, and structured AI prompt. Preserve the user's intent. Return ONLY the improved prompt — no preamble, no explanation.",
+          messages: [{ role: "user", content: `Improve this ${context}:\n\n${value}` }],
+          max_tokens: 1500,
+        }),
+      });
+      const data = await r.json();
+      if (data.response) onChange(data.response);
+      else auditLog("ENHANCE", "prompt", "error", data?.error || "No response");
+    } catch (e) { auditLog("ENHANCE", "prompt", "error", e.message); }
+    finally { setLoading(false); }
+  };
+  return (
+    <button className="enhance-btn" onClick={enhance} disabled={loading || !value?.trim()} title={`AI-enhance this ${context}`}>
+      {loading ? <span className="spin" style={{ width:10, height:10, borderWidth:1.5 }} /> : "✨"}
+      {!compact && " Enhance"}
+    </button>
+  );
+}
+
+// ─── COMMAND CENTER ────────────────────────────────────────────────────────
 function CommandCenter({ agents, skills, runs, onChat }) {
   const active = agents.filter(a => a.status === "active").length;
   const totalRuns = agents.reduce((s,a) => s+(a.total_runs||0), 0);
   const totalTok = agents.reduce((s,a) => s+(a.total_tokens||0), 0);
   const recent = [...runs].sort((a,b) => new Date(b.started_at||0)-new Date(a.started_at||0)).slice(0,8);
 
+  const provDist = {};
+  runs.forEach(r => { if (r.provider_used) provDist[r.provider_used] = (provDist[r.provider_used]||0)+1; });
+
   return (
     <div className="slide-in">
       <div className="stat-grid">
         {[
-          { label:"Active Agents",    value:active,          sub:`${agents.length-active} standby`,        c:C.green  },
-          { label:"Registered Skills",value:skills.length,   sub:`${skills.filter(s=>s.is_active).length} enabled`, c:C.accent },
-          { label:"Total Runs",        value:fmt(totalRuns), sub:"all agents all time",                    c:C.cyan   },
-          { label:"Tokens Consumed",   value:fmt(totalTok),  sub:"across all providers",                   c:C.yellow },
+          { label:"Active Agents",    value:active,             sub:`${agents.length-active} standby`,        c:C.green  },
+          { label:"Registered Skills",value:skills.length,      sub:`${skills.filter(s=>s.is_active).length} enabled`, c:C.accent },
+          { label:"Total Runs",        value:fmt(totalRuns),    sub:"all agents all time",                    c:C.cyan   },
+          { label:"Tokens Consumed",   value:fmt(totalTok),     sub:"across all providers",                   c:C.yellow },
         ].map(s => (
           <div key={s.label} className="stat-card" style={{ "--c":s.c }}>
             <div className="stat-label">{s.label}</div>
@@ -345,11 +582,38 @@ function CommandCenter({ agents, skills, runs, onChat }) {
           </div>
         </div>
       </div>
+
+      {/* Provider Distribution */}
+      <div className="card" style={{ padding:16 }}>
+        <div className="section-title">◆ Provider Distribution</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10 }}>
+          {Object.entries(PROVIDERS).slice(0,4).map(([key, p]) => {
+            const agentsUsing = agents.filter(a=>a.primary_provider===key||a.fallback_provider===key).length;
+            const runsUsing = runs.filter(r=>r.provider_used===key).length;
+            return (
+              <div key={key} style={{ background:C.surface, border:`1px solid ${p.color}22`, borderRadius:9, padding:"12px 14px" }}>
+                <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
+                  <span style={{ color:p.color, fontSize:15 }}>{p.logo}</span>
+                  <span style={{ fontFamily:"'Syne',sans-serif", fontSize:12, fontWeight:700 }}>{p.label}</span>
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:4 }}>
+                  {[["PRIMARY",agents.filter(a=>a.primary_provider===key).length],["FALLBACK",agents.filter(a=>a.fallback_provider===key).length],["RUNS",runsUsing]].map(([l,v])=>(
+                    <div key={l} style={{ textAlign:"center" }}>
+                      <div style={{ fontFamily:"'Syne',sans-serif", fontSize:14, fontWeight:800, color:p.color }}>{v}</div>
+                      <div style={{ fontSize:9, color:C.muted, letterSpacing:".07em" }}>{l}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
 
-// ─── AGENTS PAGE ──────────────────────────────────────────────
+// ─── AGENTS PAGE ───────────────────────────────────────────────────────────
 function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -371,22 +635,21 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     setSaving(true);
     try {
       if (modal.mode === "add") {
-        const { data, error } = await db.agents.create(d);
-        if (error) throw error;
-        if (data) setAgents(a => [...a, data]);
+        const created = await supa.post("agents", d);
+        const item = Array.isArray(created) ? created[0] : created;
+        if (item?.id) setAgents(a => [...a, item]);
+        else setAgents(a => [...a, { ...d, id: Date.now(), created_at: new Date().toISOString() }]);
       } else {
-        const { data, error } = await db.agents.update(d.id, d);
-        if (error) throw error;
-        setAgents(a => a.map(x => x.id === d.id ? (data || d) : x));
+        const updated = await supa.patch("agents", d.id, d);
+        const item = Array.isArray(updated) ? updated[0] : updated;
+        setAgents(a => a.map(x => x.id === d.id ? (item?.id ? item : d) : x));
       }
-    } catch (e) {
-      console.error("Save failed:", e);
     } finally { setSaving(false); setModal(null); }
   };
 
   const doDelete = async () => {
-    const { error } = await db.agents.remove(del.id);
-    if (!error) setAgents(a => a.filter(x => x.id !== del.id));
+    await supa.delete("agents", del.id);
+    setAgents(a => a.filter(x => x.id !== del.id));
     setDel(null);
   };
 
@@ -398,12 +661,13 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const items = JSON.parse(ev.target.result);
-        const arr = Array.isArray(items) ? items : [items];
-        for (const item of arr) {
+        const data = JSON.parse(ev.target.result);
+        const items = Array.isArray(data) ? data : [data];
+        for (const item of items) {
           const { id, created_at, updated_at, total_runs, total_tokens, ...rest } = item;
-          const { data } = await db.agents.create({ ...rest, total_runs:0, total_tokens:0 });
-          if (data) setAgents(a => [...a, data]);
+          const created = await supa.post("agents", { ...rest, total_runs:0, total_tokens:0 });
+          const newItem = Array.isArray(created) ? created[0] : created;
+          if (newItem?.id) setAgents(a => [...a, newItem]);
         }
       } catch (err) { alert("Import failed: " + err.message); }
     };
@@ -472,7 +736,7 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
                 <div className="metric-row">
                   <div className="metric-box"><div className="m-val" style={{ color:p.color }}>{(agent.total_runs||0).toLocaleString()}</div><div className="m-lbl">RUNS</div></div>
                   <div className="metric-box"><div className="m-val" style={{ color:C.cyan }}>{fmt(agent.total_tokens||0)}</div><div className="m-lbl">TOKENS</div></div>
-                  <div className="metric-box"><div className="m-val" style={{ color:C.muted, fontSize:9 }}>{agent.primary_model?.split("-")[1]||"—"}</div><div className="m-lbl">MODEL</div></div>
+                  <div className="metric-box"><div className="m-val" style={{ color:C.purple }}>{Array.isArray(agent.skill_ids)?agent.skill_ids.length:0}</div><div className="m-lbl">SKILLS</div></div>
                 </div>
               </div>
             );
@@ -480,7 +744,7 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
         </div>
       )}
 
-      {modal && <AgentModal modal={modal} onSave={save} onClose={() => setModal(null)} saving={saving} />}
+      {modal && <AgentModal modal={modal} onSave={save} onClose={() => setModal(null)} saving={saving} skills={skills} />}
       {del && (
         <Modal title="Decommission Agent" onClose={() => setDel(null)}>
           <p style={{ color:C.muted, marginBottom:18 }}>Remove agent <span style={{ color:C.red }}>{del.name}</span>? This cannot be undone.</p>
@@ -494,10 +758,17 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
   );
 }
 
-function AgentModal({ modal, onSave, onClose, saving }) {
-  const [d, setD] = useState(modal.data);
+function AgentModal({ modal, onSave, onClose, saving, skills = [] }) {
+  const [d, setD] = useState({ ...modal.data, skill_ids: modal.data.skill_ids || [] });
   const [chain, setChain] = useState(modal.data.provider_chain || [modal.data.primary_provider || "claude", modal.data.fallback_provider].filter(Boolean));
   const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+
+  const toggleSkill = (skillId) => {
+    setD(p => {
+      const ids = Array.isArray(p.skill_ids) ? p.skill_ids : [];
+      return { ...p, skill_ids: ids.includes(skillId) ? ids.filter(x => x !== skillId) : [...ids, skillId] };
+    });
+  };
 
   const moveUp = (i) => { if (i===0) return; const c=[...chain]; [c[i-1],c[i]]=[c[i],c[i-1]]; setChain(c); updateChain(c); };
   const moveDown = (i) => { if (i===chain.length-1) return; const c=[...chain]; [c[i],c[i+1]]=[c[i+1],c[i]]; setChain(c); updateChain(c); };
@@ -531,8 +802,9 @@ function AgentModal({ modal, onSave, onClose, saving }) {
         </div>
       </div>
 
+      {/* AI Provider Chain */}
       <div className="provider-routing">
-        <div className="routing-title">⬡ AI Provider Chain</div>
+        <div className="routing-title">⬡ AI Provider Chain — drag to reorder priority</div>
         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
           {chain.map((prov, i) => {
             const p = PROVIDERS[prov] || { label:prov, color:C.muted, logo:"?" };
@@ -547,6 +819,11 @@ function AgentModal({ modal, onSave, onClose, saving }) {
                   onChange={e=>set(i===0?"primary_model":"fallback_model",e.target.value)}>
                   {(MODELS_BY_PROVIDER[prov]||["custom"]).map(m=><option key={m} value={m}>{m}</option>)}
                 </select>
+                {prov==="openrouter" && (
+                  <span style={{ fontSize:10, color:C.green, background:C.green+"15", padding:"2px 7px", borderRadius:5, whiteSpace:"nowrap" }}>
+                    ✓ FREE
+                  </span>
+                )}
                 <div className="order-controls">
                   <button className="order-btn" onClick={()=>moveUp(i)} disabled={i===0}>▲</button>
                   <button className="order-btn" onClick={()=>moveDown(i)} disabled={i===chain.length-1}>▼</button>
@@ -571,7 +848,10 @@ function AgentModal({ modal, onSave, onClose, saving }) {
         <input className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this agent do?" />
       </div>
       <div className="form-group">
-        <label className="form-label">System Prompt</label>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+          <label className="form-label" style={{ marginBottom:0 }}>System Prompt</label>
+          <PromptEnhancer value={d.system_prompt} onChange={v => set("system_prompt", v)} context="agent system prompt" />
+        </div>
         <textarea className="form-input" value={d.system_prompt||""} onChange={e=>set("system_prompt",e.target.value)} placeholder="Instructions that define this agent's behavior..." rows={4} />
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -585,6 +865,37 @@ function AgentModal({ modal, onSave, onClose, saving }) {
         </div>
       </div>
 
+      {/* Skills Assignment */}
+      {skills.length > 0 && (
+        <div className="provider-routing" style={{ marginTop:13 }}>
+          <div className="routing-title">◈ Assign Skills — select capabilities this agent can use</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            {skills.map(skill => {
+              const cc = CAT_COLORS[skill.category] || CAT_COLORS.general;
+              const selected = (Array.isArray(d.skill_ids) ? d.skill_ids : []).includes(skill.id);
+              return (
+                <button key={skill.id} onClick={() => toggleSkill(skill.id)}
+                  className="btn btn-xs"
+                  style={{
+                    background: selected ? cc+"22" : "transparent",
+                    color: selected ? cc : C.muted,
+                    border: `1px solid ${selected ? cc : C.border}`,
+                    opacity: skill.is_active === false ? 0.45 : 1,
+                  }}
+                  title={skill.description || skill.identifier}>
+                  {selected ? "✓ " : ""}{skill.name}
+                </button>
+              );
+            })}
+          </div>
+          {(Array.isArray(d.skill_ids) ? d.skill_ids : []).length > 0 && (
+            <div style={{ fontSize:10, color:C.muted, marginTop:7 }}>
+              {(Array.isArray(d.skill_ids) ? d.skill_ids : []).length} skill{(Array.isArray(d.skill_ids) ? d.skill_ids : []).length !== 1 ? "s" : ""} assigned — these will be included in the agent's context during chat
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:16 }}>
         <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
         <button className="btn btn-primary" onClick={() => onSave({...d, provider_chain:chain})} disabled={saving}>
@@ -595,7 +906,7 @@ function AgentModal({ modal, onSave, onClose, saving }) {
   );
 }
 
-// ─── SKILLS PAGE ──────────────────────────────────────────────
+// ─── SKILLS PAGE ───────────────────────────────────────────────────────────
 function SkillsPage({ skills, setSkills, loading }) {
   const [modal, setModal] = useState(null);
   const [del, setDel] = useState(null);
@@ -609,6 +920,7 @@ function SkillsPage({ skills, setSkills, loading }) {
   const blankSkill = {
     name:"", identifier:"", category:"retrieval", version:"1.0.0",
     description:"", permissions:"read", rate_limit:100, is_active:true, parameters:{}, tags:[],
+    output_type:"text", pipeline_steps:[],
   };
 
   const saveSkill = async (d) => {
@@ -616,28 +928,26 @@ function SkillsPage({ skills, setSkills, loading }) {
     setSaving(true);
     try {
       if (modal.mode === "add") {
-        const { data, error } = await db.skills.create(d);
-        if (error) throw error;
-        if (data) setSkills(s => [...s, data]);
+        const created = await supa.post("skills", d);
+        const item = Array.isArray(created) ? created[0] : created;
+        setSkills(s => [...s, item?.id ? item : { ...d, id:Date.now(), created_at:new Date().toISOString() }]);
       } else {
-        const { data, error } = await db.skills.update(d.id, d);
-        if (error) throw error;
-        setSkills(s => s.map(x => x.id===d.id ? (data || d) : x));
+        const updated = await supa.patch("skills", d.id, d);
+        const item = Array.isArray(updated) ? updated[0] : updated;
+        setSkills(s => s.map(x => x.id===d.id ? (item?.id ? item : d) : x));
       }
-    } catch (e) {
-      console.error("Save failed:", e);
     } finally { setSaving(false); setModal(null); }
   };
 
   const toggleActive = async (skill) => {
     const updated = { ...skill, is_active: !skill.is_active };
-    const { error } = await db.skills.update(skill.id, { is_active: updated.is_active });
-    if (!error) setSkills(s => s.map(x => x.id===skill.id ? updated : x));
+    await supa.patch("skills", skill.id, { is_active: updated.is_active });
+    setSkills(s => s.map(x => x.id===skill.id ? updated : x));
   };
 
   const doDelete = async () => {
-    const { error } = await db.skills.remove(del.id);
-    if (!error) setSkills(s => s.filter(x => x.id !== del.id));
+    await supa.delete("skills", del.id);
+    setSkills(s => s.filter(x => x.id !== del.id));
     setDel(null);
   };
 
@@ -655,8 +965,10 @@ function SkillsPage({ skills, setSkills, loading }) {
   const processImport = async () => {
     try {
       let data;
+      // Try JSON first
       try { data = JSON.parse(importText); }
       catch {
+        // If not JSON, parse as text — create a single skill
         data = [{
           name: "Imported Skill",
           identifier: "imported_skill_"+Date.now(),
@@ -668,8 +980,9 @@ function SkillsPage({ skills, setSkills, loading }) {
       const items = Array.isArray(data) ? data : [data];
       for (const item of items) {
         const { id, created_at, ...rest } = item;
-        const { data: newItem } = await db.skills.create(rest);
-        if (newItem) setSkills(s => [...s, newItem]);
+        const created = await supa.post("skills", rest);
+        const newItem = Array.isArray(created) ? created[0] : created;
+        setSkills(s => [...s, newItem?.id ? newItem : { ...rest, id:Date.now(), created_at:new Date().toISOString() }]);
       }
       setShowImportModal(false);
       setImportText("");
@@ -741,16 +1054,18 @@ function SkillsPage({ skills, setSkills, loading }) {
         </div>
       )}
 
+      {/* Skill Modal */}
       {modal && (
         <Modal title={`${modal.mode==="add"?"Register New":"Edit"} Skill`} onClose={() => setModal(null)}>
           <SkillForm data={modal.data} onSave={saveSkill} onClose={() => setModal(null)} saving={saving} />
         </Modal>
       )}
 
+      {/* Import Modal */}
       {showImportModal && (
         <Modal title="Import Skills" onClose={() => setShowImportModal(false)} wide>
           <p style={{ color:C.muted, fontSize:12, marginBottom:12 }}>
-            Paste JSON (array or single skill), a skill description in plain text, or any structured format.
+            Paste JSON (array or single skill), a skill description in plain text, or any structured format. The system will auto-parse it.
           </p>
           <textarea className="form-input" value={importText} onChange={e=>setImportText(e.target.value)}
             placeholder='[{"name":"MySkill","identifier":"my_skill","category":"retrieval","description":"..."}]'
@@ -775,9 +1090,28 @@ function SkillsPage({ skills, setSkills, loading }) {
   );
 }
 
+const OUTPUT_TYPES = ["text", "image", "presentation", "code", "analysis", "pipeline"];
+
 function SkillForm({ data, onSave, onClose, saving }) {
-  const [d, setD] = useState(data);
+  const [d, setD] = useState({ output_type:"text", pipeline_steps:[], ...data });
   const set = (k,v) => setD(p=>({...p,[k]:v}));
+
+  const addStep = () => setD(p => ({
+    ...p, pipeline_steps: [...(p.pipeline_steps||[]), {
+      label: `Step ${(p.pipeline_steps||[]).length + 1}`,
+      provider: "claude",
+      model: "claude-sonnet-4-6",
+      prompt_template: "{{input}}",
+      system_prompt: "You are a helpful AI assistant.",
+      max_tokens: 2048,
+    }]
+  }));
+  const removeStep = (i) => setD(p => ({ ...p, pipeline_steps: p.pipeline_steps.filter((_,idx)=>idx!==i) }));
+  const setStep = (i, k, v) => setD(p => ({
+    ...p,
+    pipeline_steps: p.pipeline_steps.map((s, idx) => idx===i ? {...s,[k]:v} : s)
+  }));
+
   return (
     <>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
@@ -800,6 +1134,12 @@ function SkillForm({ data, onSave, onClose, saving }) {
           </select>
         </div>
         <div className="form-group">
+          <label className="form-label">Output Type</label>
+          <select className="form-input" value={d.output_type||"text"} onChange={e=>set("output_type",e.target.value)}>
+            {OUTPUT_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
           <label className="form-label">Permissions</label>
           <select className="form-input" value={d.permissions||"read"} onChange={e=>set("permissions",e.target.value)}>
             {["read","write","execute","admin"].map(p=><option key={p} value={p}>{p}</option>)}
@@ -809,15 +1149,94 @@ function SkillForm({ data, onSave, onClose, saving }) {
           <label className="form-label">Rate Limit (req/min)</label>
           <input className="form-input" type="number" value={d.rate_limit||100} onChange={e=>set("rate_limit",parseInt(e.target.value))} />
         </div>
-        <div className="form-group">
+        <div className="form-group" style={{ gridColumn:"span 2" }}>
           <label className="form-label">Tags (comma separated)</label>
           <input className="form-input" value={(d.tags||[]).join(",")} onChange={e=>set("tags",e.target.value.split(",").map(t=>t.trim()).filter(Boolean))} placeholder="search, nlp, vectors" />
         </div>
       </div>
       <div className="form-group">
-        <label className="form-label">Description</label>
-        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do?" rows={4} />
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+          <label className="form-label" style={{ marginBottom:0 }}>Description / Single-step Prompt</label>
+          <PromptEnhancer value={d.description} onChange={v => set("description", v)} context="skill description and prompt" />
+        </div>
+        <textarea className="form-input" value={d.description||""} onChange={e=>set("description",e.target.value)} placeholder="What does this skill do? For single-step skills this is the base prompt sent to the AI." rows={3} />
       </div>
+
+      {/* Pipeline Steps Editor */}
+      <div className="provider-routing">
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:11 }}>
+          <div className="routing-title" style={{ marginBottom:0 }}>⬡ Pipeline Steps — chain multiple AI providers</div>
+          <button className="btn btn-xs btn-ghost" onClick={addStep}>⊕ Add Step</button>
+        </div>
+        {(d.pipeline_steps||[]).length === 0 ? (
+          <div style={{ fontSize:11, color:C.dim, textAlign:"center", padding:"10px 0" }}>
+            No pipeline steps — skill runs as a single-step using the description above.
+            {" "}<span style={{ color:C.accent, cursor:"pointer" }} onClick={addStep}>Add a step →</span>
+          </div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {(d.pipeline_steps||[]).map((step, i) => {
+              const pp = PROVIDERS[step.provider] || { color:C.muted, logo:"?" };
+              return (
+                <div key={i} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"11px 13px" }}>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:9 }}>
+                    <span style={{ color:pp.color, fontSize:13 }}>{pp.logo}</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:C.text }}>Step {i+1}</span>
+                    <input className="form-input" value={step.label||""} onChange={e=>setStep(i,"label",e.target.value)}
+                      placeholder="Step label" style={{ flex:1, padding:"3px 8px", fontSize:11 }} />
+                    <button className="icon-btn" style={{ color:C.red, fontSize:11 }} onClick={()=>removeStep(i)}>✕</button>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
+                    <div>
+                      <label className="form-label">Provider</label>
+                      <select className="form-input" style={{ padding:"4px 8px", fontSize:11 }} value={step.provider||"claude"}
+                        onChange={e=>{ setStep(i,"provider",e.target.value); setStep(i,"model",MODELS_BY_PROVIDER[e.target.value]?.[0]||""); }}>
+                        {Object.entries(PROVIDERS).map(([k,p])=><option key={k} value={k}>{p.logo} {p.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label">Model</label>
+                      <select className="form-input" style={{ padding:"4px 8px", fontSize:11 }} value={step.model||""}
+                        onChange={e=>setStep(i,"model",e.target.value)}>
+                        {(MODELS_BY_PROVIDER[step.provider]||["custom"]).map(m=><option key={m} value={m}>{m}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginBottom:8 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:5 }}>
+                      <label className="form-label" style={{ marginBottom:0 }}>Prompt Template</label>
+                      <PromptEnhancer value={step.prompt_template} onChange={v=>setStep(i,"prompt_template",v)} context="step prompt template" compact />
+                    </div>
+                    <textarea className="form-input" rows={2} value={step.prompt_template||"{{input}}"}
+                      onChange={e=>setStep(i,"prompt_template",e.target.value)}
+                      placeholder="Use {{input}} for user input, {{prev}} for previous step output" />
+                  </div>
+                  <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                    <div className="form-group" style={{ marginBottom:0, flex:1 }}>
+                      <label className="form-label">System Prompt (optional)</label>
+                      <input className="form-input" style={{ fontSize:11 }} value={step.system_prompt||""} onChange={e=>setStep(i,"system_prompt",e.target.value)}
+                        placeholder="Override system prompt for this step…" />
+                    </div>
+                    <div style={{ flexShrink:0, paddingTop:14 }}>
+                      <label style={{ display:"flex", alignItems:"center", gap:5, fontSize:10, color:C.muted, cursor:"pointer" }}>
+                        <Toggle on={!!step.parallel} onChange={()=>setStep(i,"parallel",!step.parallel)} />
+                        Run in parallel
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {(d.pipeline_steps||[]).length > 0 && (
+          <div style={{ fontSize:10, color:C.muted, marginTop:8 }}>
+            Steps run in sequence by default. Toggle <strong style={{color:C.accent}}>Run in parallel</strong> on consecutive steps to execute them simultaneously.
+            Use <code style={{ color:C.accent }}>{"{{prev}}"}</code> for previous output.
+          </div>
+        )}
+      </div>
+
       <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
         <Toggle on={d.is_active!==false} onChange={() => set("is_active",!d.is_active)} />
         <span style={{ fontSize:12, color:C.muted }}>Skill is {d.is_active!==false?"active":"inactive"}</span>
@@ -832,24 +1251,122 @@ function SkillForm({ data, onSave, onClose, saving }) {
   );
 }
 
-// ─── CHAT PAGE ────────────────────────────────────────────────
-function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
+// ─── SLIDE DECK RENDERER ───────────────────────────────────────────────────
+function isSlideOutput(text = "") {
+  return text.includes("\n---\n") || text.includes("\n---") || text.startsWith("---");
+}
+
+function SlidesDeck({ text }) {
+  const rawSlides = text.split(/\n---+\n?/).map(s => s.trim()).filter(Boolean);
+  const slides = rawSlides.map(slide => {
+    const lines = slide.split("\n");
+    // Extract title: first ## or # heading
+    const titleLine = lines.find(l => /^#{1,3}\s/.test(l));
+    const title = titleLine ? titleLine.replace(/^#{1,3}\s+/, "") : "";
+    // Extract notes
+    const notesIdx = lines.findIndex(l => /^notes?:/i.test(l));
+    const notes = notesIdx >= 0 ? lines.slice(notesIdx).join("\n").replace(/^notes?:\s*/i, "") : "";
+    // Body: everything except title line and notes
+    const body = lines
+      .filter((l, i) => l !== titleLine && (notesIdx < 0 || i < notesIdx))
+      .join("\n").trim();
+    return { title, body, notes };
+  });
+
+  return (
+    <div className="slides-deck">
+      {slides.map((slide, i) => (
+        <div key={i} className="slide-card">
+          <span className="slide-num">Slide {i + 1} / {slides.length}</span>
+          {slide.title && <div className="slide-title">{slide.title}</div>}
+          {slide.body && <div className="slide-body">{slide.body}</div>}
+          {slide.notes && <div className="slide-notes">🎤 {slide.notes}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── CHAT PAGE ─────────────────────────────────────────────────────────────
+function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState([]); // [{name, content, type}]
   const bottomRef = useRef(null);
+  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const msgsRef = useRef([]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
-  useEffect(() => { setMsgs([]); }, [agent?.id]);
+  // Keep msgsRef in sync so send() always has latest history
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior:"smooth" });
+  }, [msgs]);
+
+  useEffect(() => {
+    // Reset messages when agent changes
+    setMsgs([]);
+  }, [agent?.id]);
+
+  const agentSkillIds = Array.isArray(agent?.skill_ids) ? agent.skill_ids : [];
+  const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
+
+  const handleFileAttach = async (e) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      const isImage = file.type.startsWith("image/");
+      const content = await new Promise(res => {
+        const reader = new FileReader();
+        reader.onload = ev => res(ev.target.result);
+        if (isImage) reader.readAsDataURL(file);
+        else reader.readAsText(file);
+      });
+      setAttachedFiles(p => [...p, { name: file.name, content, type: file.type, isImage }]);
+    }
+    e.target.value = "";
+  };
+
+  const exportChat = (format) => {
+    const msgs_ = msgsRef.current;
+    if (format === "json") {
+      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `chat-${agent.name}-${Date.now()}.json`);
+    } else {
+      const md = [`# Chat with ${agent.name}`, `*Exported ${new Date().toLocaleString()}*`, ""].concat(
+        msgs_.map(m => {
+          if (m.role === "user") return `**You:** ${m.text}\n`;
+          if (m.role === "pipeline") return `**[Pipeline: ${m.skill_name}]**\n${(m.steps_output||[]).map(s=>`- ${s.label}: ${s.output}`).join("\n")}\n`;
+          return `**${agent.name}:** ${m.text || m.final_output}\n`;
+        })
+      ).join("\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+      a.download = `chat-${agent.name}-${Date.now()}.md`;
+      a.click();
+    }
+  };
 
   const send = useCallback(async () => {
-    if (!input.trim() || !agent || loading) return;
+    if ((!input.trim() && attachedFiles.length === 0) || !agent || loading) return;
     const userMsg = input.trim();
+    const history = msgsRef.current;
+    // Build message with file context prepended
+    let fullMessage = userMsg;
+    if (attachedFiles.length > 0) {
+      const fileContext = attachedFiles.map(f =>
+        f.isImage
+          ? `[Image attached: ${f.name}]`
+          : `--- File: ${f.name} ---\n${f.content.slice(0, 8000)}\n--- End of ${f.name} ---`
+      ).join("\n\n");
+      fullMessage = fileContext + (userMsg ? `\n\nUser message: ${userMsg}` : "");
+    }
     setInput("");
-    setMsgs(m => [...m, { role:"user", text:userMsg, ts:new Date() }]);
+    setAttachedFiles([]);
+    setMsgs(m => [...m, { role:"user", text: userMsg || `📎 ${attachedFiles.map(f=>f.name).join(", ")}`, ts:new Date() }]);
     setLoading(true);
     try {
-      const result = await routeToAI(agent, userMsg);
+      const result = await routeToAI(agent, fullMessage, history, agentSkills);
       setMsgs(m => [...m, {
         role:"agent", text:result.response, ts:new Date(),
         meta:`${result.provider_used} · ${result.model_used} · ${result.tokens_used}tok · ${result.latency_ms}ms${result.fallback_triggered?" · FALLBACK":""}`
@@ -860,8 +1377,47 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
     } catch(e) {
       setMsgs(m => [...m, { role:"agent", text:`⚠ Error: ${e.message}\n\nCheck your API keys in Settings.`, meta:"error", ts:new Date() }]);
     } finally { setLoading(false); }
-  }, [input, agent, loading, setAgents]);
+  }, [input, agent, loading, setAgents, agentSkills]);
 
+  const runSkillPipeline = useCallback(async (skill) => {
+    if (!agent || loading) return;
+    // Use the last user message as input, or prompt user to type something
+    const lastUserMsg = msgsRef.current.filter(m => m.role === "user").slice(-1)[0]?.text || "";
+    if (!lastUserMsg) {
+      setMsgs(m => [...m, { role:"agent", text:`◈ To run "${skill.name}", send a message first — it will be used as the pipeline input.`, meta:"system", ts:new Date() }]);
+      return;
+    }
+    const steps = Array.isArray(skill.pipeline_steps) && skill.pipeline_steps.length > 0
+      ? skill.pipeline_steps
+      : [{ label: skill.name, provider: agent.primary_provider, model: agent.primary_model,
+           prompt_template: `${skill.description || "Process this:"}\n\n{{input}}`,
+           system_prompt: agent.system_prompt }];
+
+    const placeholderIdx = msgsRef.current.length;
+    setMsgs(m => [...m, { role:"pipeline", skill_name:skill.name, steps_output:[], loading:true, ts:new Date() }]);
+    setLoading(true);
+    try {
+      const r = await fetch("/api/pipeline", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `Pipeline error ${r.status}`);
+      setMsgs(m => m.map((msg, i) => i === placeholderIdx
+        ? { ...msg, steps_output: data.steps_output, final_output: data.final_output, is_image: data.is_image, loading: false,
+            meta: `${data.steps_output.length} step${data.steps_output.length!==1?"s":""} · ${data.total_tokens}tok · ${data.total_latency_ms}ms` }
+        : msg
+      ));
+    } catch(e) {
+      setMsgs(m => m.map((msg, i) => i === placeholderIdx
+        ? { ...msg, steps_output:[{ label:"Error", output:`⚠ ${e.message}`, error:true }], loading:false }
+        : msg
+      ));
+    } finally { setLoading(false); }
+  }, [agent, loading, agentSkills]);
+
+  // CONDITIONAL RENDER AFTER ALL HOOKS
   if (!agent) {
     return (
       <div className="chat-wrap slide-in" style={{ alignItems:"center", justifyContent:"center", color:C.muted, gap:12 }}>
@@ -896,7 +1452,16 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
           value={agent.id} onChange={e => { const a=agents.find(x=>x.id===e.target.value||x.id==e.target.value); if(a) onSelectAgent(a); }}>
           {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
-        {msgs.length > 0 && <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>}
+        {msgs.length > 0 && (<>
+          <div style={{ position:"relative" }}>
+            <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => document.getElementById("export-chat-menu").style.display === "none" ? document.getElementById("export-chat-menu").style.display="block" : document.getElementById("export-chat-menu").style.display="none"}>↓ Export</button>
+            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:140, zIndex:9999 }}>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>{ } JSON</button>
+            </div>
+          </div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>
+        </>)}
       </div>
 
       <div className="chat-msgs">
@@ -905,14 +1470,51 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
             <div style={{ fontSize:40, marginBottom:10 }}>{p.icon}</div>
             <div style={{ fontFamily:"'Syne',sans-serif", fontSize:15, fontWeight:800, color:C.text, marginBottom:6 }}>{agent.name}</div>
             <div style={{ fontSize:12, maxWidth:360, margin:"0 auto", lineHeight:1.8 }}>{agent.description || "Ready to assist. Send a message to begin."}</div>
+            <div style={{ marginTop:16, fontSize:11, color:C.dim }}>
+              Provider: <span style={{ color:PROVIDERS[agent.primary_provider]?.color }}>{PROVIDERS[agent.primary_provider]?.logo} {agent.primary_provider}</span>
+              {agent.fallback_provider && <> · Fallback: <span style={{ color:PROVIDERS[agent.fallback_provider]?.color }}>{agent.fallback_provider}</span></>}
+            </div>
           </div>
         )}
         {msgs.map((m, i) => (
           <div key={i}>
-            <div className={`msg msg-${m.role}`}>{m.text}</div>
-            {m.meta && (
+            {m.role === "pipeline" ? (
+              <div className="pipeline-card">
+                <div className="pipeline-header">
+                  <span style={{ color:C.purple }}>◈</span>
+                  <span style={{ fontWeight:700 }}>{m.skill_name}</span>
+                  {m.loading && <Spinner />}
+                  {!m.loading && m.meta && <span style={{ color:C.muted, fontSize:10, marginLeft:"auto" }}>{m.meta}</span>}
+                </div>
+                {(m.steps_output||[]).map((step, si) => (
+                  <div key={si} className={`pipeline-step${step.error?" pipeline-step-error":""}`}>
+                    <div className="pipeline-step-label">
+                      <span style={{ color:PROVIDERS[step.provider]?.color||C.muted }}>{PROVIDERS[step.provider]?.logo||"?"}</span>
+                      {step.label}
+                      <span style={{ marginLeft:"auto", fontSize:10, color:C.muted }}>{step.provider} · {step.latency_ms}ms</span>
+                    </div>
+                    {step.is_image
+                      ? <img src={step.output} alt="Generated" style={{ maxWidth:"100%", borderRadius:6, marginTop:6 }} />
+                      : (step.provider === "notebooklm" && step.model === "notebooklm-slides") || isSlideOutput(step.output)
+                        ? <SlidesDeck text={step.output} />
+                        : <div className="pipeline-step-output">{step.output}</div>
+                    }
+                  </div>
+                ))}
+              </div>
+            ) : m.role === "agent" && isSlideOutput(m.text) ? (
+              <div className="pipeline-card" style={{ borderLeft:`3px solid ${C.accent}` }}>
+                <div className="pipeline-header" style={{ marginBottom:8 }}>
+                  <span style={{ color:C.accent }}>⬡</span> Presentation
+                </div>
+                <SlidesDeck text={m.text} />
+              </div>
+            ) : (
+              <div className={`msg msg-${m.role}`}>{m.text}</div>
+            )}
+            {m.meta && m.role !== "pipeline" && (
               <div className="msg-meta" style={{ justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
-                {m.meta==="error" ? <span style={{ color:C.red }}>error</span> : m.meta}
+                {m.meta==="error"||m.meta==="system" ? <span style={{ color:m.meta==="error"?C.red:C.muted }}>{m.meta==="error"?"error":""}</span> : m.meta}
               </div>
             )}
           </div>
@@ -925,12 +1527,50 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
         <div ref={bottomRef} />
       </div>
 
+      {agentSkills.length > 0 && (
+        <div style={{ padding:"7px 18px", borderTop:`1px solid ${C.border}`, display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", background:C.surface }}>
+          <span style={{ fontSize:9, color:C.dim, letterSpacing:".1em", textTransform:"uppercase", marginRight:2 }}>Skills</span>
+          {agentSkills.map(skill => {
+            const cc = CAT_COLORS[skill.category]||C.muted;
+            const hasSteps = Array.isArray(skill.pipeline_steps) && skill.pipeline_steps.length > 0;
+            return (
+              <button key={skill.id} className="btn btn-xs"
+                onClick={() => runSkillPipeline(skill)} disabled={loading}
+                style={{ color:cc, border:`1px solid ${cc}40`, background:`${cc}0d` }}
+                title={skill.description}>
+                {hasSteps ? "⬡" : "◈"} {skill.name}
+                {hasSteps && <span style={{ fontSize:9, opacity:.7, marginLeft:3 }}>·{skill.pipeline_steps.length}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {attachedFiles.length > 0 && (
+        <div className="file-chips">
+          {attachedFiles.map((f, i) => (
+            <div key={i} className="file-chip">
+              <span>{f.isImage ? "🖼" : "📄"}</span>
+              <span className="file-chip-name">{f.name}</span>
+              <button onClick={() => setAttachedFiles(p => p.filter((_,idx)=>idx!==i))}
+                style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:11, padding:0, flexShrink:0 }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <input ref={fileInputRef} type="file" style={{ display:"none" }} multiple
+        accept=".txt,.md,.json,.csv,.pdf,.js,.py,.ts,.jsx,.tsx,.html,.css,.xml,.yaml,.yml,image/*"
+        onChange={handleFileAttach} />
+
       <div className="chat-input-row">
-        <textarea className="chat-input" rows={2} value={input}
+        <button className="btn btn-ghost btn-sm" style={{ alignSelf:"flex-end", flexShrink:0 }} title="Attach file"
+          onClick={() => fileInputRef.current?.click()}>📎</button>
+        <textarea ref={inputRef} className="chat-input" rows={2} value={input}
           placeholder={`Message ${agent.name}… (Enter to send, Shift+Enter for new line)`}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
-        <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ alignSelf:"flex-end" }}>
+        <button className="btn btn-primary" onClick={send} disabled={loading || (!input.trim() && attachedFiles.length === 0)} style={{ alignSelf:"flex-end" }}>
           {loading ? <Spinner /> : "Send ↑"}
         </button>
       </div>
@@ -938,7 +1578,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents }) {
   );
 }
 
-// ─── RUN HISTORY PAGE ─────────────────────────────────────────
+// ─── RUN HISTORY PAGE ──────────────────────────────────────────────────────
 function RunHistoryPage({ runs, agents }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -968,11 +1608,14 @@ function RunHistoryPage({ runs, agents }) {
         <div className="table-wrap">
           <table className="data-table">
             <thead>
-              <tr><th>Agent</th><th>Provider</th><th>Model</th><th>Status</th><th>Tokens</th><th>Latency</th><th>Time</th></tr>
+              <tr>
+                <th>Agent</th><th>Provider</th><th>Model</th><th>Status</th><th>Tokens</th><th>Latency</th><th>Time</th>
+              </tr>
             </thead>
             <tbody>
               {filtered.slice(0,100).map(r => {
                 const agent = agents.find(a=>a.id===r.agent_id);
+                const p = PROVIDERS[r.provider_used] || { label:r.provider_used, color:C.muted, logo:"?" };
                 return (
                   <tr key={r.id}>
                     <td>
@@ -1001,66 +1644,96 @@ function RunHistoryPage({ runs, agents }) {
   );
 }
 
-// ─── API KEYS PAGE ────────────────────────────────────────────
-function ApiKeysPage() {
-  const [keys, setKeys] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("agentops_keys")||"{}"); } catch { return {}; }
-  });
-  const [show, setShow] = useState({});
-  const [saved, setSaved] = useState(false);
+// ─── API KEYS PAGE ─────────────────────────────────────────────────────────
+const ENV_KEY_DEFS = [
+  { env:"ANTHROPIC_API_KEY",  provider:"claude",     label:"Claude (Anthropic)", logo:"◆", color:"#d97706", hint:"sk-ant-api03-...", where:"console.anthropic.com → API Keys" },
+  { env:"GEMINI_API_KEY",     provider:"gemini",     label:"Google Gemini / Imagen / NotebookLM / Veo", logo:"✦", color:"#4285f4", hint:"AIzaSy...", where:"aistudio.google.com → Get API key" },
+  { env:"OPENROUTER_API_KEY", provider:"openrouter", label:"OpenRouter (300+ models, free + paid)", logo:"⊛", color:"#7c3aed", hint:"sk-or-v1-...", where:"openrouter.ai/keys" },
+  { env:"DEEPSEEK_API_KEY",   provider:"deepseek",   label:"DeepSeek", logo:"◉", color:"#10b981", hint:"sk-...", where:"platform.deepseek.com → API keys" },
+  { env:"OPENAI_API_KEY",     provider:"openai",     label:"OpenAI (GPT-4, o3, DALL-E)", logo:"⊕", color:"#74aa9c", hint:"sk-proj-...", where:"platform.openai.com/api-keys" },
+  { env:"GROQ_API_KEY",       provider:"groq",       label:"Groq (ultra-fast Llama / Mixtral)", logo:"◧", color:"#f55036", hint:"gsk_...", where:"console.groq.com/keys" },
+  { env:"MISTRAL_API_KEY",    provider:"mistral",    label:"Mistral AI", logo:"◐", color:"#ff7000", hint:"...", where:"console.mistral.ai/api-keys" },
+  { env:"COHERE_API_KEY",     provider:"cohere",     label:"Cohere", logo:"◑", color:"#39594d", hint:"...", where:"dashboard.cohere.com/api-keys" },
+  { env:"CUSTOM_API_KEY",     provider:"custom",     label:"Custom Provider", logo:"✳", color:"#8b5cf6", hint:"your key", where:"Your provider's dashboard" },
+  { env:"CUSTOM_API_URL",     provider:"custom",     label:"Custom API Base URL", logo:"🌐", color:"#64748b", hint:"https://...", where:"Your provider's docs" },
+];
 
-  const saveKeys = () => {
-    localStorage.setItem("agentops_keys", JSON.stringify(keys));
-    setSaved(true);
-    setTimeout(()=>setSaved(false), 2000);
+function ApiKeysPage() {
+  const [status, setStatus] = useState(null);
+  const [checking, setChecking] = useState(false);
+
+  const checkStatus = async () => {
+    setChecking(true);
+    try {
+      const r = await fetch("/api/status");
+      const data = await r.json();
+      setStatus(data.providers || {});
+    } catch {
+      setStatus({});
+    } finally { setChecking(false); }
   };
 
-  const keyDefs = [
-    { id:"ANTHROPIC_API_KEY",  label:"Claude (Anthropic)", logo:"◆", color:"#d97706", hint:"sk-ant-..." },
-    { id:"GEMINI_API_KEY",     label:"Google Gemini",      logo:"✦", color:"#4285f4", hint:"AI..." },
-    { id:"DEEPSEEK_API_KEY",   label:"DeepSeek",           logo:"◉", color:"#10b981", hint:"sk-..." },
-    { id:"OPENAI_API_KEY",     label:"OpenAI",             logo:"⊕", color:"#74aa9c", hint:"sk-..." },
-    { id:"MISTRAL_API_KEY",    label:"Mistral AI",         logo:"◐", color:"#ff7000", hint:"..." },
-    { id:"GROQ_API_KEY",       label:"Groq",               logo:"◧", color:"#f55036", hint:"gsk_..." },
-    { id:"COHERE_API_KEY",     label:"Cohere",             logo:"◑", color:"#39594d", hint:"..." },
-    { id:"CUSTOM_API_KEY",     label:"Custom Provider",    logo:"✳", color:"#8b5cf6", hint:"your key..." },
-    { id:"CUSTOM_API_URL",     label:"Custom API URL",     logo:"🌐", color:"#64748b", hint:"https://..." },
-  ];
-
   return (
-    <div className="slide-in" style={{ maxWidth:700 }}>
-      <div style={{ background:C.yellow+"12", border:`1px solid ${C.yellow}30`, borderRadius:9, padding:"11px 14px", marginBottom:18, fontSize:12, color:C.yellow, lineHeight:1.6 }}>
-        ⚠ API keys are stored locally in your browser for development. For production, set them as environment variables on your server (ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.).
+    <div className="slide-in" style={{ maxWidth:720 }}>
+      {/* How-to banner */}
+      <div style={{ background:C.accent+"12", border:`1px solid ${C.accent}30`, borderRadius:10, padding:"14px 16px", marginBottom:22 }}>
+        <div style={{ fontWeight:700, fontSize:13, marginBottom:8, color:C.accentHi }}>⚙ How to configure API keys</div>
+        <ol style={{ paddingLeft:18, fontSize:12, lineHeight:2, color:C.text }}>
+          <li>Open your <strong>Vercel Dashboard</strong> → select the <em>agentops-platform</em> project</li>
+          <li>Go to <strong>Settings → Environment Variables</strong></li>
+          <li>Add each key using the exact variable name shown below</li>
+          <li>Click <strong>Save</strong>, then <strong>Redeploy</strong> the project for changes to take effect</li>
+        </ol>
       </div>
-      {keyDefs.map(k => (
-        <div key={k.id} className="key-card">
-          <div className="key-logo" style={{ background:k.color+"18", color:k.color, border:`1px solid ${k.color}30` }}>{k.logo}</div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontWeight:600, fontSize:12, marginBottom:5 }}>{k.label}</div>
-            <input
-              className="key-field"
-              type={show[k.id]?"text":"password"}
-              placeholder={k.hint}
-              value={keys[k.id]||""}
-              onChange={e=>setKeys(p=>({...p,[k.id]:e.target.value}))}
-            />
+
+      {/* Key reference table */}
+      <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
+        {ENV_KEY_DEFS.map(k => (
+          <div key={k.env} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:9, padding:"12px 14px", display:"flex", alignItems:"flex-start", gap:12 }}>
+            <div style={{ width:32, height:32, display:"flex", alignItems:"center", justifyContent:"center", background:k.color+"18", color:k.color, border:`1px solid ${k.color}30`, borderRadius:8, fontSize:15, flexShrink:0 }}>{k.logo}</div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontWeight:600, fontSize:12, marginBottom:3 }}>{k.label}</div>
+              <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:C.cyan, background:C.surface, padding:"3px 8px", borderRadius:5, display:"inline-block", marginBottom:4 }}>{k.env}</div>
+              <div style={{ fontSize:11, color:C.muted }}>Get it at: <span style={{ color:C.text }}>{k.where}</span></div>
+            </div>
+            {status && (
+              <span style={{ fontSize:10, color:status[k.provider]?C.green:C.dim, background:(status[k.provider]?C.green:C.dim)+"15", padding:"3px 9px", borderRadius:4, fontFamily:"'JetBrains Mono',monospace", flexShrink:0, alignSelf:"center" }}>
+                {status[k.provider] ? "✓ SET" : "NOT SET"}
+              </span>
+            )}
           </div>
-          <button className="icon-btn" onClick={()=>setShow(s=>({...s,[k.id]:!s[k.id]}))}>
-            {show[k.id]?"🙈":"👁"}
+        ))}
+      </div>
+
+      {/* Status checker */}
+      <div className="card" style={{ padding:16 }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: status ? 14 : 0 }}>
+          <div style={{ fontWeight:700, fontSize:12 }}>◎ Live Connection Status</div>
+          <button className="btn btn-primary" onClick={checkStatus} disabled={checking} style={{ fontSize:11, padding:"5px 14px" }}>
+            {checking ? "Checking…" : "Check Now"}
           </button>
         </div>
-      ))}
-      <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:6 }}>
-        <button className="btn btn-ghost" onClick={()=>setKeys({})}>Clear All</button>
-        <button className={`btn ${saved?"btn-success":"btn-primary"}`} onClick={saveKeys}>
-          {saved ? "✓ Saved!" : "Save Keys"}
-        </button>
+        {status && (
+          <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+            {Object.entries(PROVIDERS).map(([k,p]) => {
+              const isSet = !!status[k];
+              return (
+                <div key={k} style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 10px", background:C.surface, borderRadius:7, border:`1px solid ${isSet?C.green+"40":C.border}` }}>
+                  <span style={{ color:p.color, fontSize:12 }}>{p.logo}</span>
+                  <span style={{ fontSize:11, fontWeight:500 }}>{p.label}</span>
+                  <span style={{ fontSize:10, color:isSet?C.green:C.dim, fontFamily:"'JetBrains Mono',monospace" }}>{isSet?"ON":"OFF"}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {!status && <div style={{ fontSize:12, color:C.muted }}>Click "Check Now" to verify which providers are configured on the server.</div>}
       </div>
     </div>
   );
 }
 
-// ─── DATABASE PAGE ────────────────────────────────────────────
+// ─── DATABASE PAGE ─────────────────────────────────────────────────────────
 function DatabasePage({ agents, skills, runs }) {
   const tables = [
     { name:"agents", icon:"⬡", count:agents.length, color:C.accent,
@@ -1118,55 +1791,241 @@ function DatabasePage({ agents, skills, runs }) {
   );
 }
 
-// ─── ROOT APP ─────────────────────────────────────────────────
-const NAV = [
-  { id:"command",   icon:"◎", label:"Command Center", group:"main" },
-  { id:"agents",    icon:"⬡", label:"Agents",         group:"main", countKey:"agents" },
-  { id:"skills",    icon:"◈", label:"Skills",          group:"main", countKey:"skills" },
-  { id:"chat",      icon:"💬", label:"Chat",            group:"main" },
-  { id:"runs",      icon:"▶", label:"Run History",     group:"data", countKey:"runs" },
-  { id:"database",  icon:"▦", label:"Database",        group:"data" },
-  { id:"apikeys",   icon:"🔑", label:"API Keys",        group:"data" },
-];
+// ─── CONNECTORS PAGE ───────────────────────────────────────────────────────
+const CONNECTOR_TYPES = {
+  email:       { label:"Email",        color:"#4285f4", icon:"✉", fields:[{k:"smtp_host",l:"SMTP Host"},{k:"username",l:"Username"},{k:"password",l:"Password / App Key",secret:true},{k:"from_name",l:"From Name"}] },
+  whatsapp:    { label:"WhatsApp",     color:"#25d366", icon:"📱", fields:[{k:"phone_number_id",l:"Phone Number ID"},{k:"access_token",l:"Access Token",secret:true},{k:"verify_token",l:"Webhook Verify Token"}] },
+  slack:       { label:"Slack",        color:"#4a154b", icon:"💬", fields:[{k:"bot_token",l:"Bot Token",secret:true},{k:"channel",l:"Default Channel"}] },
+  webhook:     { label:"Webhook",      color:"#f59e0b", icon:"⚡", fields:[{k:"url",l:"Endpoint URL"},{k:"secret",l:"Secret / Auth Header",secret:true},{k:"method",l:"HTTP Method (GET/POST)"}] },
+  github:      { label:"GitHub",       color:"#6e40c9", icon:"⊕", fields:[{k:"token",l:"Personal Access Token",secret:true},{k:"owner",l:"Owner / Org"},{k:"repo",l:"Repository"}] },
+  googledrive: { label:"Google Drive", color:"#fbbc04", icon:"▦", fields:[{k:"client_id",l:"Client ID"},{k:"client_secret",l:"Client Secret",secret:true},{k:"refresh_token",l:"Refresh Token",secret:true}] },
+  telegram:    { label:"Telegram",     color:"#0088cc", icon:"✈", fields:[{k:"bot_token",l:"Bot Token",secret:true},{k:"chat_id",l:"Chat ID"}] },
+  custom:      { label:"Custom API",   color:"#8b5cf6", icon:"✳", fields:[{k:"url",l:"Base URL"},{k:"api_key",l:"API Key",secret:true},{k:"headers",l:"Extra Headers (JSON)"}] },
+};
 
-const SUPA_URL = import.meta.env.VITE_SUPABASE_URL || "";
+function ConnectorModal({ modal, onSave, onClose, saving }) {
+  const [d, setD] = useState(modal.data);
+  const set = (k, v) => setD(p => ({ ...p, [k]: v }));
+  const setConf = (k, v) => setD(p => ({ ...p, config: { ...(p.config||{}), [k]: v } }));
+  const ct = CONNECTOR_TYPES[d.type] || CONNECTOR_TYPES.custom;
+  return (
+    <Modal title={`${modal.mode==="add"?"New":"Edit"} Connector`} onClose={onClose}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+        <div className="form-group" style={{ gridColumn:"span 2" }}>
+          <label className="form-label">Name</label>
+          <input className="form-input" value={d.name||""} onChange={e=>set("name",e.target.value)} placeholder="e.g. My WhatsApp Bot" autoFocus />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Type</label>
+          <select className="form-input" value={d.type||"webhook"} onChange={e=>set("type",e.target.value)}>
+            {Object.entries(CONNECTOR_TYPES).map(([k,v])=><option key={k} value={k}>{v.icon} {v.label}</option>)}
+          </select>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Status</label>
+          <select className="form-input" value={d.status||"inactive"} onChange={e=>set("status",e.target.value)}>
+            {["active","inactive","error"].map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      {ct.fields.map(f => (
+        <div key={f.k} className="form-group">
+          <label className="form-label">{f.l}</label>
+          <input className="form-input" type={f.secret?"password":"text"}
+            value={(d.config||{})[f.k]||""} onChange={e=>setConf(f.k,e.target.value)} placeholder={`Enter ${f.l}…`} />
+        </div>
+      ))}
+      <div className="form-group">
+        <label className="form-label">Notes</label>
+        <textarea className="form-input" rows={2} value={d.notes||""} onChange={e=>set("notes",e.target.value)} placeholder="Purpose, linked agents, instructions…" />
+      </div>
+      <div style={{ display:"flex", justifyContent:"flex-end", gap:9, marginTop:12 }}>
+        <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+        <button className="btn btn-primary" onClick={()=>onSave(d)} disabled={saving || !d.name?.trim()}>
+          {saving ? <Spinner /> : modal.mode==="add" ? "Add Connector" : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function ConnectorsPage({ connectors, setConnectors, loading }) {
+  const [modal, setModal] = useState(null);
+  const [del, setDel] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const blank = { name:"", type:"webhook", status:"inactive", config:{}, notes:"" };
+
+  const save = async (d) => {
+    if (!d.name?.trim()) return;
+    setSaving(true);
+    try {
+      if (modal.mode === "add") {
+        const created = await supa.post("connectors", d);
+        const item = Array.isArray(created) ? created[0] : created;
+        setConnectors(p => [...p, item?.id ? item : { ...d, id:Date.now(), created_at:new Date().toISOString() }]);
+      } else {
+        const updated = await supa.patch("connectors", d.id, d);
+        const item = Array.isArray(updated) ? updated[0] : updated;
+        setConnectors(p => p.map(x => x.id===d.id ? (item?.id ? item : d) : x));
+      }
+    } finally { setSaving(false); setModal(null); }
+  };
+
+  const doDelete = async () => {
+    await supa.delete("connectors", del.id);
+    setConnectors(p => p.filter(x => x.id !== del.id));
+    setDel(null);
+  };
+
+  if (loading) return <div style={{ textAlign:"center", padding:"60px 0", color:C.muted }}><Spinner /></div>;
+
+  return (
+    <div className="slide-in">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div style={{ fontSize:12, color:C.muted }}>Connect external services so agents can read, write, and act on your data.</div>
+        <button className="btn btn-primary" onClick={()=>setModal({ mode:"add", data:{ ...blank } })}>⊕ Add Connector</button>
+      </div>
+
+      {connectors.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">⌘</div>
+          <div className="empty-text">No connectors yet.<br/>Add your first integration to get started.</div>
+        </div>
+      ) : (
+        <div className="connector-grid">
+          {connectors.map(c => {
+            const ct = CONNECTOR_TYPES[c.type] || CONNECTOR_TYPES.custom;
+            const statusColor = c.status==="active"?C.green:c.status==="error"?C.red:C.muted;
+            return (
+              <div key={c.id} className="connector-card" style={{ "--tc": ct.color }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+                  <div>
+                    <span style={{ fontSize:9, padding:"2px 7px", borderRadius:3, fontWeight:700, textTransform:"uppercase", letterSpacing:".06em", background:ct.color+"18", color:ct.color, border:`1px solid ${ct.color}28`, display:"inline-flex", alignItems:"center", gap:4, marginBottom:6 }}>
+                      {ct.icon} {ct.label}
+                    </span>
+                    <div style={{ fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:800 }}>{c.name}</div>
+                  </div>
+                  <div style={{ display:"flex", gap:3, alignItems:"center" }}>
+                    <span className={`status-dot ${c.status}`} style={{ width:7, height:7, background:statusColor, boxShadow: c.status==="active"?`0 0 7px ${C.green}`:undefined }} />
+                    <button className="icon-btn" onClick={()=>setModal({ mode:"edit", data:{ ...c } })}>✎</button>
+                    <button className="icon-btn" style={{ color:C.dim }} onClick={()=>setDel(c)}>⊗</button>
+                  </div>
+                </div>
+                {c.notes && <p style={{ color:C.muted, fontSize:11, lineHeight:1.6, marginBottom:8 }}>{c.notes}</p>}
+                <div style={{ fontSize:10, color:C.dim }}>Added {relative(c.created_at)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {modal && <ConnectorModal modal={modal} onSave={save} onClose={()=>setModal(null)} saving={saving} />}
+      {del && (
+        <Modal title="Delete Connector" onClose={()=>setDel(null)}>
+          <p style={{ color:C.muted, marginBottom:18 }}>Delete connector <span style={{ color:C.red }}>{del.name}</span>?</p>
+          <div style={{ display:"flex", justifyContent:"flex-end", gap:9 }}>
+            <button className="btn btn-ghost" onClick={()=>setDel(null)}>Cancel</button>
+            <button className="btn btn-danger" onClick={doDelete}>Delete</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── AUDIT LOG PAGE ────────────────────────────────────────────────────────
+function AuditLogPage() {
+  const [logs, setLogs] = useState([]);
+  useEffect(() => {
+    const handler = (e) => setLogs(p => [e.detail, ...p].slice(0, 300));
+    window.addEventListener("agentops_audit", handler);
+    return () => window.removeEventListener("agentops_audit", handler);
+  }, []);
+
+  const opColor = { SAVE:C.green, UPDATE:C.cyan, DELETE:C.red, LOAD:C.muted, ENHANCE:C.purple };
+  return (
+    <div className="slide-in">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+        <div style={{ fontSize:12, color:C.muted }}>Live log of all database operations. Shows saves, updates, deletes and errors.</div>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setLogs([])}>Clear</button>
+      </div>
+      {logs.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">▦</div>
+          <div className="empty-text">No activity yet.<br/>Save an agent or skill to see entries here.</div>
+        </div>
+      ) : (
+        <div className="run-log">
+          {logs.map((l, i) => (
+            <div key={i} className="audit-row">
+              <span style={{ color: l.status==="error" ? C.red : C.green, fontSize:13, flexShrink:0 }}>
+                {l.status==="error" ? "⚠" : "✓"}
+              </span>
+              <span style={{ color: opColor[l.op] || C.muted, fontWeight:700, fontSize:11, minWidth:60 }}>{l.op}</span>
+              <span style={{ color:C.text, fontSize:11 }}>{l.table}</span>
+              {l.detail && <span style={{ color:C.muted, fontSize:10 }}>{l.detail}</span>}
+              <span style={{ marginLeft:"auto", color:C.dim, fontSize:10 }}>{relative(l.ts)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ROOT APP ─────────────────────────────────────────────────────────────
+const NAV = [
+  { id:"command",    icon:"◎", label:"Command Center", group:"main" },
+  { id:"agents",     icon:"⬡", label:"Agents",         group:"main", countKey:"agents" },
+  { id:"skills",     icon:"◈", label:"Skills",          group:"main", countKey:"skills" },
+  { id:"connectors", icon:"⌘", label:"Connectors",      group:"main", countKey:"connectors" },
+  { id:"chat",       icon:"💬", label:"Chat",            group:"main" },
+  { id:"runs",       icon:"▶", label:"Run History",     group:"data", countKey:"runs" },
+  { id:"audit",      icon:"▦", label:"Audit Log",       group:"data" },
+  { id:"database",   icon:"⬟", label:"Database",        group:"data" },
+  { id:"apikeys",    icon:"🔑", label:"API Keys",        group:"data" },
+];
 
 export default function App() {
   const [page, setPage] = useState("command");
   const [agents, setAgents] = useState([]);
   const [skills, setSkills] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [connectors, setConnectors] = useState([]);
   const [chatAgent, setChatAgent] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [providerStatus, setProviderStatus] = useState({ claude:false, gemini:false, deepseek:false });
 
   const loadData = async () => {
     setLoading(true);
-    const [{ data: agentData }, { data: skillData }, { data: runData }] = await Promise.all([
-      db.agents.list(),
-      db.skills.list(),
-      db.runs.list(200),
+    const [a, s, r, cn] = await Promise.all([
+      supa.get("agents", "order=created_at.asc"),
+      supa.get("skills", "order=created_at.asc"),
+      supa.get("agent_runs", "order=started_at.desc&limit=200"),
+      supa.get("connectors", "order=created_at.asc"),
     ]);
-    const agentArr = agentData || [];
-    const skillArr = skillData || [];
-    const runArr = runData || [];
-    setAgents(agentArr);
-    setSkills(skillArr);
-    setRuns(runArr);
-    if (!chatAgent && agentArr.length > 0) setChatAgent(agentArr[0]);
+    setAgents(Array.isArray(a)?a:[]);
+    setSkills(Array.isArray(s)?s:[]);
+    setRuns(Array.isArray(r)?r:[]);
+    setConnectors(Array.isArray(cn)?cn:[]);
+    if (!chatAgent && Array.isArray(a) && a.length>0) setChatAgent(a[0]);
     setLoading(false);
   };
 
   useEffect(() => { loadData(); }, []);
 
   const goChat = (agent) => { setChatAgent(agent); setPage("chat"); };
-  const counts = { agents:agents.length, skills:skills.length, runs:runs.length };
+
+  const counts = { agents:agents.length, skills:skills.length, runs:runs.length, connectors:connectors.length };
 
   return (
     <>
       <style>{STYLES}</style>
+      <ToastProvider />
       <div className="app">
         <div className="nebula" />
 
+        {/* SIDEBAR */}
         <div className="sidebar">
           <div className="logo-wrap">
             <div className="logo-hex">⬡</div>
@@ -1223,6 +2082,7 @@ export default function App() {
           </div>
         </div>
 
+        {/* MAIN */}
         <div className="main">
           <div className="topbar">
             <div style={{ display:"flex", alignItems:"center" }}>
@@ -1241,12 +2101,14 @@ export default function App() {
 
           {page !== "chat" && (
             <div className="content">
-              {page==="command" && <CommandCenter agents={agents} skills={skills} runs={runs} onChat={goChat} />}
-              {page==="agents"  && <AgentsPage agents={agents} setAgents={setAgents} skills={skills} onChat={goChat} loading={loading} />}
-              {page==="skills"  && <SkillsPage skills={skills} setSkills={setSkills} loading={loading} />}
-              {page==="runs"    && <RunHistoryPage runs={runs} agents={agents} />}
-              {page==="database"&& <DatabasePage agents={agents} skills={skills} runs={runs} />}
-              {page==="apikeys" && <ApiKeysPage />}
+              {page==="command"    && <CommandCenter agents={agents} skills={skills} runs={runs} onChat={goChat} />}
+              {page==="agents"    && <AgentsPage agents={agents} setAgents={setAgents} skills={skills} onChat={goChat} loading={loading} />}
+              {page==="skills"    && <SkillsPage skills={skills} setSkills={setSkills} loading={loading} />}
+              {page==="connectors"&& <ConnectorsPage connectors={connectors} setConnectors={setConnectors} loading={loading} />}
+              {page==="audit"     && <AuditLogPage />}
+              {page==="runs"      && <RunHistoryPage runs={runs} agents={agents} />}
+              {page==="database"  && <DatabasePage agents={agents} skills={skills} runs={runs} />}
+              {page==="apikeys"   && <ApiKeysPage />}
             </div>
           )}
 
@@ -1256,6 +2118,7 @@ export default function App() {
               agents={agents}
               onSelectAgent={a=>{ setChatAgent(a); }}
               setAgents={setAgents}
+              skills={skills}
             />
           )}
         </div>

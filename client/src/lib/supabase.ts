@@ -1,10 +1,14 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+// Supabase anon key is a publishable key — safe in client bundles.
+// Fallbacks ensure saves work even when VITE_ env vars are not set at Vercel build time.
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+  || "https://cnliqngeufcdsypuimog.supabase.co";
+
 const supabaseAnonKey =
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   import.meta.env.VITE_SUPABASE_KEY ||
-  "";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNubGlxbmdldWZjZHN5cHVpbW9nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNTk1MTksImV4cCI6MjA4ODgzNTUxOX0.dKnMsDxcwQZATCsVO7EVKluCh9MpRRipuSl1B_JCNO0";
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -66,45 +70,32 @@ export interface AgentRun {
   ended_at?: string;
 }
 
-// ─── Data access helpers (replaces raw-fetch supa client) ─────
+// ─── Data access helpers ──────────────────────────────────────
 
 export const db = {
   agents: {
     list: () =>
       supabase.from("agents").select("*").order("created_at", { ascending: true }),
-
     create: (data: Partial<Agent>) =>
       supabase.from("agents").insert(data).select().single(),
-
     update: (id: string, data: Partial<Agent>) =>
       supabase.from("agents").update(data).eq("id", id).select().single(),
-
     remove: (id: string) =>
       supabase.from("agents").delete().eq("id", id),
   },
-
   skills: {
     list: () =>
       supabase.from("skills").select("*").order("created_at", { ascending: true }),
-
     create: (data: Partial<Skill>) =>
       supabase.from("skills").insert(data).select().single(),
-
     update: (id: string, data: Partial<Skill>) =>
       supabase.from("skills").update(data).eq("id", id).select().single(),
-
     remove: (id: string) =>
       supabase.from("skills").delete().eq("id", id),
   },
-
   runs: {
     list: (limit = 200) =>
-      supabase
-        .from("agent_runs")
-        .select("*")
-        .order("started_at", { ascending: false })
-        .limit(limit),
-
+      supabase.from("agent_runs").select("*").order("started_at", { ascending: false }).limit(limit),
     create: (data: Partial<AgentRun>) =>
       supabase.from("agent_runs").insert(data).select().single(),
   },

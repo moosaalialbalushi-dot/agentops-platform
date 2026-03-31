@@ -1,20 +1,39 @@
 // ─── /api/chat.js ────────────────────────────────────────────────────────────
 // Vercel Serverless Function — Multi-provider AI proxy
-// Supports: Claude, Gemini, DeepSeek, OpenAI, Groq + fallback logic
+// Supports: Claude, Gemini, DeepSeek, OpenAI, Groq, xAI (Grok), Qwen + fallback logic
+// Supports multi-turn conversation history via `messages` array
 //
 // Required Environment Variables (set in Vercel Dashboard → Settings → Env):
 //   ANTHROPIC_API_KEY   → for Claude
-//   GEMINI_API_KEY      → for Gemini
+//   GEMINI_API_KEY      → for Gemini + Imagen + NotebookLM
 //   DEEPSEEK_API_KEY    → for DeepSeek
 //   OPENAI_API_KEY      → for OpenAI
 //   GROQ_API_KEY        → for Groq
+//   OPENROUTER_API_KEY  → for OpenRouter (300+ models, many free incl. Qwen)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const config = { maxDuration: 60 };
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+interface ProviderParams {
+  model?: string;
+  system_prompt?: string;
+  messages: ChatMessage[];
+  max_tokens?: number;
+  temperature?: number;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
 // ─── Provider Callers ────────────────────────────────────────────────────────
 
-async function callClaude({ model, system_prompt, message, max_tokens }) {
+async function callClaude({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -30,7 +49,8 @@ async function callClaude({ model, system_prompt, message, max_tokens }) {
       model: model || "claude-sonnet-4-6",
       max_tokens: max_tokens || 1024,
       system: system_prompt || "You are a helpful AI agent.",
-      messages: [{ role: "user", content: message }],
+      temperature: temperature ?? 0.7,
+      messages, // full conversation history [{role:"user"|"assistant", content}]
     }),
   });
 
@@ -44,7 +64,7 @@ async function callClaude({ model, system_prompt, message, max_tokens }) {
   };
 }
 
-async function callGemini({ model, system_prompt, message, max_tokens }) {
+async function callGemini({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
@@ -52,13 +72,22 @@ async function callGemini({ model, system_prompt, message, max_tokens }) {
   const modelName = model || "gemini-2.0-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
+  // Convert messages to Gemini format (role "model" instead of "assistant")
+  const contents = messages.map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
+
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       system_instruction: system_prompt ? { parts: [{ text: system_prompt }] } : undefined,
-      contents: [{ role: "user", parts: [{ text: message }] }],
-      generationConfig: { maxOutputTokens: max_tokens || 1024 },
+      contents,
+      generationConfig: {
+        maxOutputTokens: max_tokens || 1024,
+        temperature: temperature ?? 0.7,
+      },
     }),
   });
 
@@ -71,7 +100,7 @@ async function callGemini({ model, system_prompt, message, max_tokens }) {
   return { response: text, tokens_used: tokens, latency_ms: Date.now() - start };
 }
 
-async function callOpenAI({ model, system_prompt, message, max_tokens, baseUrl, apiKey: customKey }) {
+async function callOpenAI({ model, system_prompt, messages, max_tokens, temperature, baseUrl, apiKey: customKey }: ProviderParams) {
   const apiKey = customKey || process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -85,9 +114,10 @@ async function callOpenAI({ model, system_prompt, message, max_tokens, baseUrl, 
     body: JSON.stringify({
       model: model || "gpt-4o",
       max_tokens: max_tokens || 1024,
+      temperature: temperature ?? 0.7,
       messages: [
         { role: "system", content: system_prompt || "You are a helpful AI agent." },
-        { role: "user", content: message },
+        ...messages, // full conversation history
       ],
     }),
   });
@@ -102,53 +132,214 @@ async function callOpenAI({ model, system_prompt, message, max_tokens, baseUrl, 
   };
 }
 
-async function callDeepSeek({ model, system_prompt, message, max_tokens }) {
+async function callDeepSeek({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("DEEPSEEK_API_KEY not set");
 
-  // DeepSeek uses the OpenAI-compatible API
   return callOpenAI({
     model: model || "deepseek-chat",
     system_prompt,
-    message,
+    messages,
     max_tokens,
+    temperature,
     baseUrl: "https://api.deepseek.com",
     apiKey,
   });
 }
 
-async function callGroq({ model, system_prompt, message, max_tokens }) {
+async function callGroq({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
-  // Groq also uses the OpenAI-compatible API
   return callOpenAI({
     model: model || "llama-3.3-70b-versatile",
     system_prompt,
-    message,
+    messages,
     max_tokens,
+    temperature,
     baseUrl: "https://api.groq.com/openai",
     apiKey,
   });
 }
 
+// ─── OpenRouter — unified gateway, 300+ models, many free ───────────────────
+// Free models use the ":free" suffix e.g. "qwen/qwen-2.5-72b-instruct:free"
+// Docs: https://openrouter.ai/docs
+
+async function callOpenRouter({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OPENROUTER_API_KEY not set. Set it in Vercel → Settings → Environment Variables.");
+
+  const selectedModel = model || "qwen/qwen-2.5-72b-instruct:free";
+
+  const start = Date.now();
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://agentops-platform.vercel.app",
+      "X-Title": "AgentOps Platform",
+    },
+    body: JSON.stringify({
+      model: selectedModel,
+      max_tokens: max_tokens || 1024,
+      temperature: temperature ?? 0.7,
+      messages: [
+        { role: "system", content: system_prompt || "You are a helpful AI agent." },
+        ...messages,
+      ],
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `OpenRouter error ${res.status}`);
+
+  return {
+    response: data.choices?.[0]?.message?.content || "",
+    tokens_used: data.usage?.total_tokens || 0,
+    latency_ms: Date.now() - start,
+  };
+}
+
+// ─── Veo — Google video generation via Gemini API key ────────────────────────
+// Veo uses a long-running operation pattern; we poll for up to 55 s.
+
+async function callVeo(params: ProviderParams) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set (required for Veo video generation)");
+
+  const videoModel = params.model || "veo-2.0-generate-001";
+  const prompt = params.messages[params.messages.length - 1]?.content || "";
+  const start = Date.now();
+
+  // 1 – Initiate generation (long-running operation)
+  const initUrl = `https://generativelanguage.googleapis.com/v1beta/models/${videoModel}:predictLongRunning?key=${apiKey}`;
+  const initRes = await fetch(initUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { aspectRatio: "16:9", sampleCount: 1 },
+    }),
+  });
+  const initData = await initRes.json();
+  if (!initRes.ok) throw new Error(initData?.error?.message || `Veo init error ${initRes.status}`);
+
+  const operationName = initData.name;
+  if (!operationName) throw new Error("Veo did not return an operation name");
+
+  // 2 – Poll until done (max ~50 s to stay under Vercel 60 s limit)
+  const pollUrl = `https://generativelanguage.googleapis.com/v1beta/${operationName}?key=${apiKey}`;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    await new Promise(r => setTimeout(r, 5000)); // wait 5 s
+    const pollRes = await fetch(pollUrl);
+    const pollData = await pollRes.json();
+    if (pollData.done) {
+      const video = pollData.response?.predictions?.[0];
+      const videoUri = video?.videoMetadata?.video?.uri || video?.videoUri || "";
+      const b64 = video?.bytesBase64Encoded || "";
+      const mime = video?.mimeType || "video/mp4";
+      const dataUrl = b64 ? `data:${mime};base64,${b64}` : videoUri;
+      return {
+        response: dataUrl || `✓ Video generated (operation: ${operationName})`,
+        tokens_used: 0,
+        latency_ms: Date.now() - start,
+        is_video: true,
+      };
+    }
+    if (pollData.error) throw new Error(pollData.error.message || "Veo generation failed");
+  }
+
+  // Timed out — return operation name so user can check later
+  return {
+    response: `⏳ Video generation is still processing. Operation ID: \`${operationName}\`\nThis typically takes 1–3 minutes. Veo 2 is generating your video in the background.`,
+    tokens_used: 0,
+    latency_ms: Date.now() - start,
+  };
+}
+
+// ─── NotebookLM — powered by Gemini 2.5 Pro with specialized prompts ────────
+
+const NOTEBOOKLM_PROMPTS: Record<string, string> = {
+  "notebooklm-research":
+    "You are NotebookLM, a research assistant specialized in deep document analysis, source synthesis, and evidence-based reasoning. Extract key insights, identify connections between ideas, and produce well-cited summaries with clear headings.",
+  "notebooklm-slides":
+    "You are NotebookLM in Slides mode. Convert content into a Markdown slide deck. Use '---' between slides. Each slide: ## Title, 3-5 bullets, and 'Notes: ...' for speaker notes.",
+  "notebooklm-summary":
+    "You are NotebookLM in Summary mode. Produce a structured summary with: Executive Summary, Key Concepts, Important Details, and Takeaways sections.",
+  "notebooklm-qa":
+    "You are NotebookLM in Q&A mode. Generate 5-8 insightful Q&A pairs covering the most important aspects. Format: **Q: ...** / **A: ...**",
+  "notebooklm-podcast":
+    "You are NotebookLM in Audio Overview mode. Write a conversational podcast script (Host A / Host B) that explains the content in an engaging, accessible way.",
+};
+
+async function callNotebookLM(params: ProviderParams) {
+  const nlmPrompt = NOTEBOOKLM_PROMPTS[params.model || "notebooklm-research"]
+    || NOTEBOOKLM_PROMPTS["notebooklm-research"];
+  const merged = {
+    ...params,
+    model: "gemini-2.5-pro-preview-05-06",
+    system_prompt: `${nlmPrompt}\n\n${params.system_prompt || ""}`.trim(),
+    temperature: 0.4,
+  };
+  return callGemini(merged);
+}
+
+// ─── Imagen — Google image generation via Gemini API key ─────────────────────
+
+async function callImagen(params: ProviderParams) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY not set (required for Imagen)");
+
+  const model = params.model || "imagen-3.0-generate-002";
+  const prompt = params.messages[params.messages.length - 1]?.content || "";
+  const start = Date.now();
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1 },
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error?.message || `Imagen error ${res.status}`);
+
+  const b64 = data.predictions?.[0]?.bytesBase64Encoded;
+  const mime = data.predictions?.[0]?.mimeType || "image/png";
+  const dataUrl = b64 ? `data:${mime};base64,${b64}` : "";
+
+  return {
+    response: dataUrl,
+    tokens_used: 0,
+    latency_ms: Date.now() - start,
+    is_image: true,
+  };
+}
+
 // ─── Provider Router ─────────────────────────────────────────────────────────
 
-async function callProvider(provider, params) {
+async function callProvider(provider: string, params: ProviderParams) {
   switch (provider?.toLowerCase()) {
-    case "claude":    return callClaude(params);
-    case "gemini":    return callGemini(params);
-    case "openai":    return callOpenAI(params);
-    case "deepseek":  return callDeepSeek(params);
-    case "groq":      return callGroq(params);
-    default:          throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq`);
+    case "claude":      return callClaude(params);
+    case "gemini":      return callGemini(params);
+    case "openai":      return callOpenAI(params);
+    case "deepseek":    return callDeepSeek(params);
+    case "groq":        return callGroq(params);
+    case "openrouter":  return callOpenRouter(params);
+    case "notebooklm":  return callNotebookLM(params);
+    case "imagen":      return callImagen(params);
+    case "veo":         return callVeo(params);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, notebooklm, imagen, veo`);
   }
 }
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 
-export default async function handler(req, res) {
-  // Allow CORS for local dev
+export default async function handler(req: any, res: any) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -160,17 +351,25 @@ export default async function handler(req, res) {
     provider,
     model,
     system_prompt,
-    message,
+    message,           // single message (backwards compat)
+    messages,          // full conversation history [{role, content}] — preferred
     max_tokens,
+    temperature,
     fallback_provider,
     fallback_model,
   } = req.body || {};
 
-  // Validate required fields
   if (!provider) return res.status(400).json({ error: "Missing required field: provider" });
-  if (!message)  return res.status(400).json({ error: "Missing required field: message" });
+  if (!message && (!messages || messages.length === 0))
+    return res.status(400).json({ error: "Missing required field: message or messages" });
 
-  const params = { model, system_prompt, message, max_tokens };
+  // Build the messages array: prefer full history, fall back to single message
+  const chatMessages: ChatMessage[] =
+    messages && messages.length > 0
+      ? messages
+      : [{ role: "user" as const, content: message }];
+
+  const params: ProviderParams = { model, system_prompt, messages: chatMessages, max_tokens, temperature };
 
   // ── Try primary provider ──────────────────────────────────────────────────
   try {
@@ -183,7 +382,7 @@ export default async function handler(req, res) {
       latency_ms:         result.latency_ms,
       fallback_triggered: false,
     });
-  } catch (primaryError) {
+  } catch (primaryError: any) {
     console.error(`[AgentOps] Primary provider "${provider}" failed:`, primaryError.message);
 
     // ── Try fallback provider if configured ──────────────────────────────────
@@ -199,7 +398,7 @@ export default async function handler(req, res) {
           latency_ms:         result.latency_ms,
           fallback_triggered: true,
         });
-      } catch (fallbackError) {
+      } catch (fallbackError: any) {
         console.error(`[AgentOps] Fallback provider "${fallback_provider}" also failed:`, fallbackError.message);
         return res.status(502).json({
           error: `Both providers failed. Primary (${provider}): ${primaryError.message}. Fallback (${fallback_provider}): ${fallbackError.message}`,
@@ -207,7 +406,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // No fallback configured — return the primary error
     return res.status(502).json({
       error: `Provider "${provider}" failed: ${primaryError.message}`,
     });
