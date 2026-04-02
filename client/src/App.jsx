@@ -153,11 +153,11 @@ const PROVIDERS = {
 
 const MODELS_BY_PROVIDER = {
   claude:     [
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
+    "claude-sonnet-4-6",          // fast + capable — recommended default
+    "claude-haiku-4-5-20251001",  // fastest, lowest cost
+    "claude-3-5-sonnet-20241022", // stable, widely available
+    "claude-3-7-sonnet-20250219", // advanced reasoning
+    "claude-opus-4-6",            // most powerful — slow, may timeout on Vercel
     "claude-3-opus-20240229",
   ],
   gemini:     [
@@ -1288,27 +1288,43 @@ function SlidesDeck({ text }) {
 }
 
 // ─── CHAT PAGE ─────────────────────────────────────────────────────────────
-function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
+function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conversations, setConversations }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [attachedFiles, setAttachedFiles] = useState([]); // [{name, content, type}]
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
   const msgsRef = useRef([]);
+  const convIdRef = useRef(null);
 
   // Keep msgsRef in sync so send() always has latest history
   useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
+  useEffect(() => { setMsgs([]); convIdRef.current = null; }, [agent?.id]);
 
+  // Save conversation to Supabase after each AI reply
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior:"smooth" });
+    const last = msgs[msgs.length - 1];
+    if (!agent || msgs.length === 0 || last?.role === "user") return;
+    const save = async () => {
+      const title = msgs.find(m=>m.role==="user")?.text?.slice(0,80) || "Conversation";
+      const payload = { agent_id: agent.id, agent_name: agent.name, title,
+        messages: msgs, message_count: msgs.length, updated_at: new Date().toISOString() };
+      if (convIdRef.current) {
+        const updated = await supa.patch("conversations", convIdRef.current, payload);
+        const item = Array.isArray(updated) ? updated[0] : updated;
+        setConversations(p => p.map(c => c.id === convIdRef.current ? { ...c, ...payload } : c));
+      } else {
+        const created = await supa.post("conversations", payload);
+        const item = Array.isArray(created) ? created[0] : created;
+        if (item?.id) { convIdRef.current = item.id; setConversations(p => [item, ...p]); }
+      }
+    };
+    save();
   }, [msgs]);
-
-  useEffect(() => {
-    // Reset messages when agent changes
-    setMsgs([]);
-  }, [agent?.id]);
 
   const agentSkillIds = Array.isArray(agent?.skill_ids) ? agent.skill_ids : [];
   const agentSkills = skills.filter(s => agentSkillIds.includes(s.id));
@@ -1317,13 +1333,14 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
     const files = Array.from(e.target.files || []);
     for (const file of files) {
       const isImage = file.type.startsWith("image/");
+      const isPDF   = file.type === "application/pdf";
       const content = await new Promise(res => {
         const reader = new FileReader();
         reader.onload = ev => res(ev.target.result);
-        if (isImage) reader.readAsDataURL(file);
+        if (isImage || isPDF) reader.readAsDataURL(file); // base64 for binary files
         else reader.readAsText(file);
       });
-      setAttachedFiles(p => [...p, { name: file.name, content, type: file.type, isImage }]);
+      setAttachedFiles(p => [...p, { name: file.name, content, type: file.type, isImage, isPDF }]);
     }
     e.target.value = "";
   };
@@ -1351,20 +1368,41 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
     if ((!input.trim() && attachedFiles.length === 0) || !agent || loading) return;
     const userMsg = input.trim();
     const history = msgsRef.current;
-    // Build message with file context prepended
-    let fullMessage = userMsg;
-    if (attachedFiles.length > 0) {
-      const fileContext = attachedFiles.map(f =>
-        f.isImage
-          ? `[Image attached: ${f.name}]`
-          : `--- File: ${f.name} ---\n${f.content.slice(0, 8000)}\n--- End of ${f.name} ---`
-      ).join("\n\n");
-      fullMessage = fileContext + (userMsg ? `\n\nUser message: ${userMsg}` : "");
-    }
+    const filesSnap = attachedFiles;
     setInput("");
     setAttachedFiles([]);
-    setMsgs(m => [...m, { role:"user", text: userMsg || `📎 ${attachedFiles.map(f=>f.name).join(", ")}`, ts:new Date() }]);
+    setMsgs(m => [...m, { role:"user", text: userMsg || `📎 ${filesSnap.map(f=>f.name).join(", ")}`, ts:new Date() }]);
     setLoading(true);
+
+    // Extract PDF text via /api/pdf (uses Gemini) before building message
+    let fullMessage = userMsg;
+    if (filesSnap.length > 0) {
+      const parts = [];
+      for (const f of filesSnap) {
+        if (f.isPDF) {
+          try {
+            setMsgs(m => [...m, { role:"agent", text:`📄 Reading ${f.name}…`, meta:"system", ts:new Date() }]);
+            const r = await fetch("/api/pdf", {
+              method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({ file_data: f.content, mime_type: f.type }),
+            });
+            const data = await r.json();
+            if (r.ok && data.text) {
+              parts.push(`--- PDF: ${f.name} ---\n${data.text}\n--- End of ${f.name} ---`);
+              // Remove the "reading" status message
+              setMsgs(m => m.filter(x => !(x.meta==="system" && x.text?.includes(f.name))));
+            } else {
+              parts.push(`[PDF: ${f.name} — could not extract text: ${data.error || "unknown error"}]`);
+            }
+          } catch { parts.push(`[PDF: ${f.name} — extraction failed]`); }
+        } else if (f.isImage) {
+          parts.push(`[Image attached: ${f.name}]`);
+        } else {
+          parts.push(`--- File: ${f.name} ---\n${f.content.slice(0, 8000)}\n--- End of ${f.name} ---`);
+        }
+      }
+      fullMessage = parts.join("\n\n") + (userMsg ? `\n\nUser message: ${userMsg}` : "");
+    }
     try {
       const result = await routeToAI(agent, fullMessage, history, agentSkills);
       setMsgs(m => [...m, {
@@ -1432,8 +1470,32 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
 
   const p = PERSONAS[agent.persona] || PERSONAS.researcher;
 
+  const agentConvs = conversations.filter(c => c.agent_id === agent?.id).slice(0, 30);
+
   return (
-    <div className="chat-wrap slide-in">
+    <div className="chat-wrap slide-in" style={{ flexDirection:"row", padding:0 }}>
+      {/* History sidebar */}
+      {showHistory && (
+        <div style={{ width:220, flexShrink:0, borderRight:`1px solid ${C.border}`, display:"flex", flexDirection:"column", background:C.surface, overflowY:"auto" }}>
+          <div style={{ padding:"10px 12px", borderBottom:`1px solid ${C.border}`, fontWeight:700, fontSize:11, color:C.muted, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            HISTORY
+            <button className="icon-btn" onClick={()=>setShowHistory(false)}>✕</button>
+          </div>
+          <button className="nav-item" style={{ margin:"6px 8px", borderRadius:6, border:`1px dashed ${C.border}`, justifyContent:"center", color:C.accent }}
+            onClick={()=>{ setMsgs([]); convIdRef.current=null; }}>
+            + New Chat
+          </button>
+          {agentConvs.length === 0 && <div style={{ padding:"20px 12px", color:C.dim, fontSize:11, textAlign:"center" }}>No past conversations yet</div>}
+          {agentConvs.map(c => (
+            <div key={c.id} onClick={()=>{ setMsgs(Array.isArray(c.messages)?c.messages:[]); convIdRef.current=c.id; setShowHistory(false); }}
+              style={{ padding:"8px 12px", cursor:"pointer", borderBottom:`1px solid ${C.border}30`, borderLeft: convIdRef.current===c.id ? `2px solid ${C.accent}` : "2px solid transparent" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:C.text, marginBottom:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{c.title||"Untitled"}</div>
+              <div style={{ fontSize:10, color:C.dim }}>{c.message_count||0} messages · {relative(c.updated_at||c.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0 }}>
       <div className="chat-header">
         <span style={{ color:p.color, fontSize:18, flexShrink:0 }}>{p.icon}</span>
         <div style={{ flex:1, minWidth:0 }}>
@@ -1452,15 +1514,17 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
           value={agent.id} onChange={e => { const a=agents.find(x=>x.id===e.target.value||x.id==e.target.value); if(a) onSelectAgent(a); }}>
           {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setShowHistory(h=>!h)} title="Chat history">🕐 History</button>
         {msgs.length > 0 && (<>
           <div style={{ position:"relative" }}>
-            <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => document.getElementById("export-chat-menu").style.display === "none" ? document.getElementById("export-chat-menu").style.display="block" : document.getElementById("export-chat-menu").style.display="none"}>↓ Export</button>
+            <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => { const m=document.getElementById("export-chat-menu"); m.style.display=m.style.display==="none"?"block":"none"; }}>↓ Export</button>
             <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:140, zIndex:9999 }}>
               <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown</button>
               <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>{ } JSON</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ window.print(); document.getElementById("export-chat-menu").style.display="none"; }}>🖨 Print / PDF</button>
             </div>
           </div>
-          <button className="btn btn-ghost btn-sm" onClick={() => setMsgs([])}>Clear</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setMsgs([]); convIdRef.current=null; }}>Clear</button>
         </>)}
       </div>
 
@@ -1564,8 +1628,11 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
         onChange={handleFileAttach} />
 
       <div className="chat-input-row">
-        <button className="btn btn-ghost btn-sm" style={{ alignSelf:"flex-end", flexShrink:0 }} title="Attach file"
+        <button className="btn btn-ghost btn-sm" style={{ alignSelf:"flex-end", flexShrink:0 }} title="Attach PDF, image, or text file"
           onClick={() => fileInputRef.current?.click()}>📎</button>
+        <input ref={fileInputRef} type="file" style={{ display:"none" }} multiple
+          accept=".pdf,.txt,.md,.csv,.json,image/*"
+          onChange={handleFileAttach} />
         <textarea ref={inputRef} className="chat-input" rows={2} value={input}
           placeholder={`Message ${agent.name}… (Enter to send, Shift+Enter for new line)`}
           onChange={e => setInput(e.target.value)}
@@ -1574,6 +1641,7 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills }) {
           {loading ? <Spinner /> : "Send ↑"}
         </button>
       </div>
+      </div>{/* end inner flex col */}
     </div>
   );
 }
@@ -1973,6 +2041,277 @@ function AuditLogPage() {
   );
 }
 
+// ─── HELP PAGE ────────────────────────────────────────────────────────────
+function HelpPage() {
+  const S = { card:{ background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"16px 18px", marginBottom:14 },
+    h:{ fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:800, marginBottom:10, color:C.accentHi },
+    h2:{ fontSize:12, fontWeight:700, color:C.text, marginBottom:5, marginTop:10 },
+    p:{ fontSize:12, color:C.muted, lineHeight:1.8, marginBottom:6 },
+    tag:{ display:"inline-block", fontSize:10, padding:"2px 8px", borderRadius:4, fontFamily:"'JetBrains Mono',monospace", marginRight:5, marginBottom:3 }};
+
+  return (
+    <div className="slide-in" style={{ maxWidth:760 }}>
+
+      <div style={S.card}>
+        <div style={S.h}>⬡ Agents — what they are</div>
+        <p style={S.p}>An <strong>Agent</strong> is an AI assistant you configure. Each agent has a name, a personality (persona), one or more AI providers, and a system prompt that tells it how to behave.</p>
+        <p style={{...S.p, marginBottom:0}}>Agents can have <strong>Skills</strong> assigned to them. When you chat with an agent, it knows about its skills and can use them.</p>
+        <div style={S.h2}>Personas</div>
+        <p style={S.p}>
+          <span style={{...S.tag, background:C.cyan+"15", color:C.cyan}}>◎ Researcher</span> — deep analysis, citations, reports<br/>
+          <span style={{...S.tag, background:"#ef444415", color:"#ef4444"}}>⬟ Guardian</span> — compliance, security, risk review<br/>
+          <span style={{...S.tag, background:C.purple+"15", color:C.purple}}>⌘ Connector</span> — integrations, data pipelines, external APIs<br/>
+          <span style={{...S.tag, background:"#f59e0b15", color:"#f59e0b"}}>◈ Strategist</span> — planning, decisions, roadmaps<br/>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>⬡ Architect</span> — system design, technical structure<br/>
+          <span style={{...S.tag, background:C.green+"15", color:C.green}}>⚙ Engineer</span> — code, automation, technical tasks
+        </p>
+        <div style={S.h2}>Quick Create an Agent</div>
+        <p style={S.p}>Go to <strong>Agents → + New Agent</strong>. Minimum required: just a <em>name</em> and select a <em>provider</em>. Everything else is optional — the agent will still work with defaults.</p>
+        <p style={S.p}>💡 Tip: Use the <strong>✨ Enhance</strong> button on the System Prompt to let AI improve your instructions automatically.</p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>◈ Skills — what they are</div>
+        <p style={S.p}>A <strong>Skill</strong> is a reusable task or prompt that an agent can run. Skills appear as quick-action buttons in the chat window.</p>
+        <div style={S.h2}>Single-step skill</div>
+        <p style={S.p}>Fills in the Description field as a prompt. The agent runs it once and returns the result. Good for: summarisation, translation, formatting, tone rewriting.</p>
+        <div style={S.h2}>Pipeline skill (multi-step)</div>
+        <p style={S.p}>Chains multiple AI steps together. Each step can use a different provider/model. Use <code>{"{{input}}"}</code> for the user's message and <code>{"{{prev}}"}</code> for the previous step's output.</p>
+        <p style={S.p}>Example pipeline: Step 1 (DeepSeek) → research the topic → Step 2 (NotebookLM) → format as slides → Step 3 (Claude) → write executive summary.</p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>⌘ Connectors — what they are</div>
+        <p style={S.p}>Connectors are external services your agents can interact with: WhatsApp, Slack, Email, GitHub, Google Drive, Telegram, webhooks, and custom APIs.</p>
+        <p style={S.p}>Currently the Connectors page lets you <strong>register and configure</strong> the connection details (tokens, URLs, bot keys). The agent uses these connection details when you include the connector in its workflow.</p>
+        <p style={S.p}>Think of them as the "phone numbers" your agent knows — you store the connection info once, then assign the connector to an agent.</p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>💬 Chat — how to use it</div>
+        <div style={S.h2}>Sending messages</div>
+        <p style={S.p}>Select an agent from the dropdown at the top. Type and press <strong>Enter</strong>. The agent remembers the full conversation history (multi-turn).</p>
+        <div style={S.h2}>Attaching PDFs</div>
+        <p style={S.p}>Click 📎 and select a PDF, image, or text file. PDFs are automatically read using Gemini (requires <code>GEMINI_API_KEY</code> in Vercel). The extracted text is included in your message to any provider.</p>
+        <div style={S.h2}>Chat history</div>
+        <p style={S.p}>Click <strong>🕐 History</strong> to see all past conversations with the current agent. Click any conversation to restore it. Each session auto-saves after every AI reply.</p>
+        <div style={S.h2}>Exporting</div>
+        <p style={S.p}>Click <strong>↓ Export</strong> → choose Markdown, JSON, or <strong>Print / PDF</strong> to save the conversation as a PDF file using your browser's print dialog.</p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>⊞ NotebookLM — how it works</div>
+        <p style={S.p}>There is <strong>no public API for Google NotebookLM</strong>. In this app, "NotebookLM" is a simulation using <strong>Gemini 2.5 Pro</strong> with specialised research prompts.</p>
+        <p style={S.p}>It requires <code>GEMINI_API_KEY</code> in Vercel env vars. The modes:</p>
+        <p style={S.p}>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>research</span> Deep report with citations<br/>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>slides</span> Markdown slide deck (--- separators)<br/>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>summary</span> Executive summary + key concepts<br/>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>Q&amp;A</span> 5–8 question/answer pairs<br/>
+          <span style={{...S.tag, background:C.accent+"15", color:C.accent}}>podcast</span> Two-host conversational script
+        </p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>▶ Veo — video generation</div>
+        <p style={S.p}>Google Veo 2 generates videos from text prompts. Select <strong>Veo</strong> as a provider in an agent, choose model <code>veo-2.0-generate-001</code>, and describe what you want in the chat.</p>
+        <p style={S.p}>Requires <code>GEMINI_API_KEY</code>. Video generation takes 1–3 minutes. The app polls for up to 55 seconds; if it's not ready, it returns an Operation ID you can use to check later.</p>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.h}>⚙ Setting up API keys</div>
+        <p style={S.p}>All API keys live in <strong>Vercel → Settings → Environment Variables</strong>. After adding keys, click <strong>Redeploy</strong>. Use the <strong>API Keys → Check Now</strong> button to verify which providers are live.</p>
+        <p style={S.p}>
+          <span style={{...S.tag, background:"#d9770615", color:"#d97706"}}>ANTHROPIC_API_KEY</span> Claude — console.anthropic.com<br/>
+          <span style={{...S.tag, background:"#4285f415", color:"#4285f4"}}>GEMINI_API_KEY</span> Gemini + Imagen + NotebookLM + Veo — aistudio.google.com<br/>
+          <span style={{...S.tag, background:"#7c3aed15", color:"#7c3aed"}}>OPENROUTER_API_KEY</span> 300+ models (free + paid) — openrouter.ai/keys<br/>
+          <span style={{...S.tag, background:"#f5503615", color:"#f55036"}}>GROQ_API_KEY</span> Llama/Mixtral (fast &amp; free) — console.groq.com
+        </p>
+      </div>
+
+    </div>
+  );
+}
+
+// ─── AI CREATOR WIZARD ────────────────────────────────────────────────────
+// Guided AI chat that builds a complete agent or skill config for you.
+const CREATOR_SYSTEM = `You are an expert AgentOps setup assistant. Your job is to help the user create a perfectly configured AI agent or skill through friendly conversation.
+
+When creating an AGENT, you need to gather:
+- Purpose / what it does
+- Industry or domain
+- Which AI provider to use (claude, gemini, openai, deepseek, groq, openrouter)
+- Tone and style (formal, casual, technical, etc.)
+- Any specific skills or tools it should use
+
+When creating a SKILL, you need to gather:
+- What task it performs
+- Whether it's single-step or multi-step pipeline
+- Which providers each step should use
+
+Ask ONE question at a time. Be concise and friendly. When you have enough information (after 3-5 exchanges), output a JSON block wrapped in triple backticks with the key "type": "agent" or "type": "skill" and all required fields. Do not explain the JSON — just output it cleanly.
+
+Agent JSON schema:
+\`\`\`json
+{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-sonnet-4-6","fallback_provider":"gemini","fallback_model":"gemini-2.0-flash","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
+\`\`\`
+
+Skill JSON schema:
+\`\`\`json
+{"type":"skill","name":"","identifier":"","category":"analysis","description":"","output_type":"text","pipeline_steps":[]}
+\`\`\`
+
+Start by asking: "What would you like to create — an Agent (AI assistant you can chat with) or a Skill (a reusable task)?"`;
+
+function CreatorPage({ agents, setAgents, skills, setSkills }) {
+  const [msgs, setMsgs] = useState([
+    { role:"agent", text:"Hi! I'm your AI setup assistant. What would you like to create?\n\n**Agent** — an AI assistant you configure and chat with\n**Skill** — a reusable task or pipeline an agent can run\n\nJust describe what you need and I'll guide you through it.", ts:new Date() }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const bottomRef = useRef(null);
+  const msgsRef = useRef(msgs);
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
+
+  const extractJSON = (text) => {
+    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (!match) return null;
+    try { return JSON.parse(match[1].trim()); } catch { return null; }
+  };
+
+  const send = async () => {
+    if (!input.trim() || loading) return;
+    const userText = input.trim();
+    setInput("");
+    const history = msgsRef.current;
+    setMsgs(m => [...m, { role:"user", text:userText, ts:new Date() }]);
+    setLoading(true);
+    try {
+      const r = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          provider: "claude", model: "claude-sonnet-4-6",
+          system_prompt: CREATOR_SYSTEM,
+          messages: [
+            ...history.filter(m=>m.role==="user"||m.role==="agent").map(m=>({ role:m.role==="agent"?"assistant":"user", content:m.text })),
+            { role:"user", content:userText }
+          ],
+          max_tokens: 1200, temperature: 0.6,
+          fallback_provider: "gemini", fallback_model: "gemini-2.0-flash",
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
+      const responseText = data.response || "";
+      setMsgs(m => [...m, { role:"agent", text:responseText, ts:new Date() }]);
+      const parsed = extractJSON(responseText);
+      if (parsed) setPreview(parsed);
+    } catch(e) {
+      setMsgs(m => [...m, { role:"agent", text:`⚠ ${e.message}`, meta:"error", ts:new Date() }]);
+    } finally { setLoading(false); }
+  };
+
+  const savePreview = async () => {
+    if (!preview) return;
+    setSaving(true);
+    try {
+      if (preview.type === "agent") {
+        const payload = {
+          name: preview.name, persona: preview.persona || "researcher",
+          primary_provider: preview.primary_provider || "claude",
+          primary_model: preview.primary_model || "claude-sonnet-4-6",
+          fallback_provider: preview.fallback_provider || null,
+          fallback_model: preview.fallback_model || null,
+          description: preview.description || "",
+          system_prompt: preview.system_prompt || "",
+          temperature: parseFloat(preview.temperature) || 0.7,
+          max_tokens: parseInt(preview.max_tokens) || 4096,
+          status: "active", provider_chain: [preview.primary_provider],
+          total_runs: 0, total_tokens: 0,
+        };
+        const created = await supa.post("agents", payload);
+        const item = Array.isArray(created)?created[0]:created;
+        if (item?.id) setAgents(p => [...p, item]);
+      } else {
+        const id = preview.identifier || preview.name?.toLowerCase().replace(/\s+/g,"_")||"skill_"+Date.now();
+        const payload = {
+          name: preview.name, identifier: id,
+          category: preview.category || "general",
+          description: preview.description || "",
+          output_type: preview.output_type || "text",
+          pipeline_steps: preview.pipeline_steps || [],
+          is_active: true, permissions: "read", rate_limit: 100,
+          tags: [], parameters: {},
+        };
+        const created = await supa.post("skills", payload);
+        const item = Array.isArray(created)?created[0]:created;
+        if (item?.id) setSkills(p => [...p, item]);
+      }
+      setSaved(true);
+      setTimeout(()=>setSaved(false), 3000);
+      setPreview(null);
+      setMsgs(m => [...m, { role:"agent", text:`✅ ${preview.type === "agent" ? "Agent" : "Skill"} **${preview.name}** has been saved! You can find it in the ${preview.type === "agent" ? "Agents" : "Skills"} page.\n\nWould you like to create another one?`, ts:new Date() }]);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", maxWidth:720 }}>
+      <div style={{ background:C.accent+"12", border:`1px solid ${C.accent}30`, borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.accentHi, lineHeight:1.6 }}>
+        ✨ <strong>AI Creator</strong> — Describe what you need and I'll configure everything for you automatically. Requires Claude or Gemini API key.
+      </div>
+
+      <div style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:10, marginBottom:12 }}>
+        {msgs.map((m, i) => (
+          <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+            <div style={{
+              maxWidth:"80%", padding:"10px 14px", borderRadius:m.role==="user"?"12px 12px 4px 12px":"12px 12px 12px 4px",
+              background:m.role==="user"?C.accent:C.card, color:m.meta==="error"?C.red:C.text,
+              border:`1px solid ${m.role==="user"?C.accent:C.border}`, fontSize:12, lineHeight:1.7,
+              whiteSpace:"pre-wrap"
+            }}>{m.text}</div>
+          </div>
+        ))}
+        {loading && <div style={{ color:C.muted, fontSize:12 }}><Spinner /> Thinking…</div>}
+        <div ref={bottomRef} />
+      </div>
+
+      {preview && (
+        <div style={{ background:C.green+"0f", border:`1px solid ${C.green}30`, borderRadius:9, padding:"12px 14px", marginBottom:12 }}>
+          <div style={{ fontWeight:700, fontSize:12, color:C.green, marginBottom:8 }}>
+            ✓ Ready to save: {preview.type === "agent" ? "Agent" : "Skill"} — <strong>{preview.name}</strong>
+          </div>
+          <div style={{ fontSize:11, color:C.muted, marginBottom:10, lineHeight:1.6 }}>
+            {preview.type === "agent"
+              ? `Provider: ${preview.primary_provider} (${preview.primary_model}) · Fallback: ${preview.fallback_provider||"none"}`
+              : `Category: ${preview.category} · Type: ${preview.output_type}`}
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button className="btn btn-primary" onClick={savePreview} disabled={saving}>
+              {saving ? <Spinner /> : saved ? "✓ Saved!" : `Save ${preview.type === "agent" ? "Agent" : "Skill"}`}
+            </button>
+            <button className="btn btn-ghost" onClick={()=>setPreview(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:8 }}>
+        <textarea className="chat-input" rows={2} value={input}
+          placeholder="Describe your agent or skill… (Enter to send)"
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); } }}
+          style={{ flex:1 }} />
+        <button className="btn btn-primary" onClick={send} disabled={loading||!input.trim()} style={{ alignSelf:"flex-end" }}>
+          {loading?<Spinner />:"Send ↑"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
 const NAV = [
   { id:"command",    icon:"◎", label:"Command Center", group:"main" },
@@ -1984,6 +2323,8 @@ const NAV = [
   { id:"audit",      icon:"▦", label:"Audit Log",       group:"data" },
   { id:"database",   icon:"⬟", label:"Database",        group:"data" },
   { id:"apikeys",    icon:"🔑", label:"API Keys",        group:"data" },
+  { id:"creator",    icon:"✨", label:"AI Creator",      group:"main" },
+  { id:"help",       icon:"?", label:"Help & Guide",    group:"data" },
 ];
 
 export default function App() {
@@ -1992,22 +2333,25 @@ export default function App() {
   const [skills, setSkills] = useState([]);
   const [runs, setRuns] = useState([]);
   const [connectors, setConnectors] = useState([]);
+  const [conversations, setConversations] = useState([]);
   const [chatAgent, setChatAgent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [providerStatus, setProviderStatus] = useState({ claude:false, gemini:false, deepseek:false });
 
   const loadData = async () => {
     setLoading(true);
-    const [a, s, r, cn] = await Promise.all([
-      supa.get("agents", "order=created_at.asc"),
-      supa.get("skills", "order=created_at.asc"),
-      supa.get("agent_runs", "order=started_at.desc&limit=200"),
-      supa.get("connectors", "order=created_at.asc"),
+    const [a, s, r, cn, cv] = await Promise.all([
+      supa.get("agents",        "order=created_at.asc"),
+      supa.get("skills",        "order=created_at.asc"),
+      supa.get("agent_runs",    "order=started_at.desc&limit=200"),
+      supa.get("connectors",    "order=created_at.asc"),
+      supa.get("conversations", "order=updated_at.desc&limit=100"),
     ]);
     setAgents(Array.isArray(a)?a:[]);
     setSkills(Array.isArray(s)?s:[]);
     setRuns(Array.isArray(r)?r:[]);
     setConnectors(Array.isArray(cn)?cn:[]);
+    setConversations(Array.isArray(cv)?cv:[]);
     if (!chatAgent && Array.isArray(a) && a.length>0) setChatAgent(a[0]);
     setLoading(false);
   };
@@ -2107,8 +2451,10 @@ export default function App() {
               {page==="connectors"&& <ConnectorsPage connectors={connectors} setConnectors={setConnectors} loading={loading} />}
               {page==="audit"     && <AuditLogPage />}
               {page==="runs"      && <RunHistoryPage runs={runs} agents={agents} />}
+              {page==="help"      && <HelpPage />}
               {page==="database"  && <DatabasePage agents={agents} skills={skills} runs={runs} />}
               {page==="apikeys"   && <ApiKeysPage />}
+              {page==="creator"   && <CreatorPage agents={agents} setAgents={setAgents} skills={skills} setSkills={setSkills} />}
             </div>
           )}
 
@@ -2119,6 +2465,8 @@ export default function App() {
               onSelectAgent={a=>{ setChatAgent(a); }}
               setAgents={setAgents}
               skills={skills}
+              conversations={conversations}
+              setConversations={setConversations}
             />
           )}
         </div>
