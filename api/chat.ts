@@ -369,7 +369,14 @@ export default async function handler(req: any, res: any) {
       ? messages
       : [{ role: "user" as const, content: message }];
 
-  const params: ProviderParams = { model, system_prompt, messages: chatMessages, max_tokens, temperature };
+  // Force numeric types — Supabase may return these as strings, which Anthropic rejects
+  const params: ProviderParams = {
+    model,
+    system_prompt,
+    messages: chatMessages,
+    max_tokens: max_tokens ? parseInt(String(max_tokens), 10) : 1024,
+    temperature: temperature !== undefined ? parseFloat(String(temperature)) : 0.7,
+  };
 
   // ── Try primary provider ──────────────────────────────────────────────────
   try {

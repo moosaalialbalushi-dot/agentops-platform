@@ -1347,20 +1347,81 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conversatio
 
   const exportChat = (format) => {
     const msgs_ = msgsRef.current;
+    const name = agent.name;
+    const now = new Date().toLocaleString();
+    const slug = `chat-${name.replace(/\s+/g,"-")}-${Date.now()}`;
+
+    const dl = (content, filename, type) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([content], { type }));
+      a.download = filename;
+      a.click();
+    };
+
     if (format === "json") {
-      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `chat-${agent.name}-${Date.now()}.json`);
-    } else {
-      const md = [`# Chat with ${agent.name}`, `*Exported ${new Date().toLocaleString()}*`, ""].concat(
+      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `${slug}.json`);
+
+    } else if (format === "md") {
+      const md = [`# Chat with ${name}`, `*Exported ${now}*`, ""].concat(
         msgs_.map(m => {
           if (m.role === "user") return `**You:** ${m.text}\n`;
           if (m.role === "pipeline") return `**[Pipeline: ${m.skill_name}]**\n${(m.steps_output||[]).map(s=>`- ${s.label}: ${s.output}`).join("\n")}\n`;
-          return `**${agent.name}:** ${m.text || m.final_output}\n`;
+          return `**${name}:** ${m.text || m.final_output}\n`;
         })
       ).join("\n");
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
-      a.download = `chat-${agent.name}-${Date.now()}.md`;
-      a.click();
+      dl(md, `${slug}.md`, "text/markdown");
+
+    } else if (format === "html") {
+      // HTML that Word can open as a .doc
+      const rows = msgs_.map(m => {
+        if (m.role === "user") return `<p><b>You:</b> ${(m.text||"").replace(/\n/g,"<br>")}</p>`;
+        if (m.role === "pipeline") return `<p><b>[Pipeline: ${m.skill_name}]</b><br>${(m.steps_output||[]).map(s=>`&nbsp;&nbsp;• ${s.label}: ${(s.output||"").replace(/\n/g," ")}`).join("<br>")}</p>`;
+        return `<p><b>${name}:</b> ${((m.text||m.final_output)||"").replace(/\n/g,"<br>")}</p>`;
+      }).join("\n<hr>\n");
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Chat with ${name}</title>
+<style>body{font-family:Calibri,Arial,sans-serif;max-width:800px;margin:40px auto;color:#111}
+h1{color:#333}hr{border:none;border-top:1px solid #eee;margin:12px 0}p{margin:8px 0;line-height:1.6}</style>
+</head><body><h1>Chat with ${name}</h1><p><em>Exported ${now}</em></p><hr>${rows}</body></html>`;
+      dl(html, `${slug}.doc`, "application/msword");
+
+    } else if (format === "txt") {
+      const txt = [`Chat with ${name}`, `Exported: ${now}`, "=".repeat(50), ""].concat(
+        msgs_.map(m => {
+          if (m.role === "user") return `YOU:\n${m.text}\n`;
+          if (m.role === "pipeline") return `[PIPELINE: ${m.skill_name}]\n${(m.steps_output||[]).map(s=>`  ${s.label}: ${s.output}`).join("\n")}\n`;
+          return `${name.toUpperCase()}:\n${m.text || m.final_output}\n`;
+        })
+      ).join("\n" + "-".repeat(40) + "\n");
+      dl(txt, `${slug}.txt`, "text/plain");
+
+    } else if (format === "pptx_html") {
+      // Slide-style HTML presentation (works in browsers, printable)
+      const agentMsgs = msgs_.filter(m => m.role === "agent" || m.role === "pipeline");
+      const slides = agentMsgs.map((m, i) => {
+        const text = (m.text || m.final_output || "").trim();
+        // First 100 chars as title, rest as body
+        const sentences = text.split(/(?<=[.!?])\s+/);
+        const title = sentences[0]?.slice(0,120) || `Slide ${i+1}`;
+        const body = sentences.slice(1).join(" ");
+        return `<section class="slide">
+  <div class="slide-num">${i+1} / ${agentMsgs.length}</div>
+  <h2>${title.replace(/</g,"&lt;")}</h2>
+  <p>${body.replace(/</g,"&lt;").replace(/\n/g,"<br>")}</p>
+</section>`;
+      });
+      const pptHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${name} — Presentation</title>
+<style>
+@page{size:landscape;margin:0}
+body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#1a1a2e}
+.slide{width:100vw;min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+  padding:60px 80px;box-sizing:border-box;background:linear-gradient(135deg,#1a1a2e,#16213e);
+  color:#eee;page-break-after:always;border-bottom:4px solid #0f3460}
+.slide-num{position:absolute;top:20px;right:30px;font-size:12px;color:#555}
+h2{font-size:28px;font-weight:700;margin-bottom:20px;color:#e94560;line-height:1.3}
+p{font-size:16px;line-height:1.8;color:#ccc;max-width:900px}
+@media print{body{background:#fff}.slide{background:#fff;border-bottom:2px solid #333}h2{color:#1a1a2e}p{color:#333}}
+</style></head><body>${slides.join("\n")}</body></html>`;
+      dl(pptHtml, `${slug}-slides.html`, "text/html");
     }
   };
 
@@ -1518,9 +1579,13 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conversatio
         {msgs.length > 0 && (<>
           <div style={{ position:"relative" }}>
             <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => { const m=document.getElementById("export-chat-menu"); m.style.display=m.style.display==="none"?"block":"none"; }}>↓ Export</button>
-            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:140, zIndex:9999 }}>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown</button>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>{ } JSON</button>
+            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:160, zIndex:9999 }}>
+              <div style={{ fontSize:10, color:C.dim, padding:"4px 10px 2px", fontWeight:700, letterSpacing:1 }}>EXPORT AS</div>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown (.md)</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("txt"); document.getElementById("export-chat-menu").style.display="none"; }}>📝 Plain Text (.txt)</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("html"); document.getElementById("export-chat-menu").style.display="none"; }}>📃 Word Doc (.doc)</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("pptx_html"); document.getElementById("export-chat-menu").style.display="none"; }}>📊 Presentation (.html)</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>⬡ JSON (.json)</button>
               <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ window.print(); document.getElementById("export-chat-menu").style.display="none"; }}>🖨 Print / PDF</button>
             </div>
           </div>
