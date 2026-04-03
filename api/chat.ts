@@ -69,7 +69,7 @@ async function callGemini({ model, system_prompt, messages, max_tokens, temperat
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
   const start = Date.now();
-  const modelName = model || "gemini-2.0-flash";
+  const modelName = model || "gemini-1.5-flash-latest";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
 
   // Convert messages to Gemini format (role "model" instead of "assistant")

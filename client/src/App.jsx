@@ -94,7 +94,7 @@ async function routeToAI(agent, userMessage, history = [], agentSkills = []) {
       system_prompt: systemPrompt,
       messages,           // full conversation history
       message: userMessage, // kept for backwards compat
-      max_tokens: agent.max_tokens || 1000,
+      max_tokens: agent.max_tokens || 4096,
       temperature: agent.temperature || 0.7,
       fallback_provider: agent.fallback_provider || null,
       fallback_model: agent.fallback_model || null,
@@ -153,18 +153,19 @@ const PROVIDERS = {
 
 const MODELS_BY_PROVIDER = {
   claude:     [
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-    "claude-3-7-sonnet-20250219",
-    "claude-3-5-sonnet-20241022",
+    "claude-sonnet-4-6",          // fast + capable — recommended default
+    "claude-haiku-4-5-20251001",  // fastest, lowest cost
+    "claude-3-5-sonnet-20241022", // stable, widely available
+    "claude-3-7-sonnet-20250219", // advanced reasoning
+    "claude-opus-4-6",            // most powerful — slow, may timeout on Vercel
     "claude-3-opus-20240229",
   ],
   gemini:     [
+    "gemini-1.5-flash-latest",    // stable default — recommended
+    "gemini-1.5-pro-latest",      // more capable, higher quota
     "gemini-2.5-pro-preview-05-06",
     "gemini-2.5-flash-preview-05-20",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash-latest-lite",
     "gemini-1.5-pro-002",
     "gemini-1.5-flash-002",
   ],
@@ -625,8 +626,8 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     name:"", persona:"researcher", description:"", status:"idle",
     primary_provider:"claude", fallback_provider:"gemini",
     provider_chain: ["claude","gemini"],
-    primary_model:"claude-sonnet-4-6", fallback_model:"gemini-2.0-flash",
-    system_prompt:"You are a helpful AI agent.", temperature:0.7, max_tokens:4096,
+    primary_model:"claude-sonnet-4-6", fallback_model:"gemini-1.5-flash-latest",
+    system_prompt:"You are a helpful AI agent. When asked to produce reports, analyses, or documents, output the complete final document in a single response — do not ask clarifying questions or provide partial drafts. Format output clearly with headings and sections.", temperature:0.7, max_tokens:4096,
     total_runs:0, total_tokens:0,
   };
 
@@ -860,8 +861,16 @@ function AgentModal({ modal, onSave, onClose, saving, skills = [] }) {
           <input className="form-input" type="number" min="0" max="2" step="0.1" value={d.temperature||0.7} onChange={e=>set("temperature",parseFloat(e.target.value))} />
         </div>
         <div className="form-group" style={{ marginBottom:0 }}>
-          <label className="form-label">Max Tokens</label>
-          <input className="form-input" type="number" min="100" max="128000" step="100" value={d.max_tokens||4096} onChange={e=>set("max_tokens",parseInt(e.target.value))} />
+          <label className="form-label">Max Tokens
+            <span title="Vercel has a 60s timeout. Safe range: 1000–4096. Above 6000 may cause 504 timeout errors on Vercel Hobby plan."
+              style={{ marginLeft:6, color:C.muted, fontSize:10, cursor:"help" }}>ⓘ</span>
+          </label>
+          <input className="form-input" type="number" min="100" max="8000" step="100" value={d.max_tokens||4096} onChange={e=>set("max_tokens",parseInt(e.target.value))} />
+          {(d.max_tokens||4096) > 5000 && (
+            <div style={{ fontSize:10, color:"#d97706", marginTop:3 }}>
+              ⚠ Above 5000 may cause 504 timeout on Vercel Hobby. Use 4096 for reliable results.
+            </div>
+          )}
         </div>
       </div>
 
@@ -1347,81 +1356,20 @@ function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conversatio
 
   const exportChat = (format) => {
     const msgs_ = msgsRef.current;
-    const name = agent.name;
-    const now = new Date().toLocaleString();
-    const slug = `chat-${name.replace(/\s+/g,"-")}-${Date.now()}`;
-
-    const dl = (content, filename, type) => {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob([content], { type }));
-      a.download = filename;
-      a.click();
-    };
-
     if (format === "json") {
-      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `${slug}.json`);
-
-    } else if (format === "md") {
-      const md = [`# Chat with ${name}`, `*Exported ${now}*`, ""].concat(
+      downloadJSON(msgs_.map(m => ({ role: m.role, text: m.text || m.final_output, ts: m.ts })), `chat-${agent.name}-${Date.now()}.json`);
+    } else {
+      const md = [`# Chat with ${agent.name}`, `*Exported ${new Date().toLocaleString()}*`, ""].concat(
         msgs_.map(m => {
           if (m.role === "user") return `**You:** ${m.text}\n`;
           if (m.role === "pipeline") return `**[Pipeline: ${m.skill_name}]**\n${(m.steps_output||[]).map(s=>`- ${s.label}: ${s.output}`).join("\n")}\n`;
-          return `**${name}:** ${m.text || m.final_output}\n`;
+          return `**${agent.name}:** ${m.text || m.final_output}\n`;
         })
       ).join("\n");
-      dl(md, `${slug}.md`, "text/markdown");
-
-    } else if (format === "html") {
-      // HTML that Word can open as a .doc
-      const rows = msgs_.map(m => {
-        if (m.role === "user") return `<p><b>You:</b> ${(m.text||"").replace(/\n/g,"<br>")}</p>`;
-        if (m.role === "pipeline") return `<p><b>[Pipeline: ${m.skill_name}]</b><br>${(m.steps_output||[]).map(s=>`&nbsp;&nbsp;• ${s.label}: ${(s.output||"").replace(/\n/g," ")}`).join("<br>")}</p>`;
-        return `<p><b>${name}:</b> ${((m.text||m.final_output)||"").replace(/\n/g,"<br>")}</p>`;
-      }).join("\n<hr>\n");
-      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Chat with ${name}</title>
-<style>body{font-family:Calibri,Arial,sans-serif;max-width:800px;margin:40px auto;color:#111}
-h1{color:#333}hr{border:none;border-top:1px solid #eee;margin:12px 0}p{margin:8px 0;line-height:1.6}</style>
-</head><body><h1>Chat with ${name}</h1><p><em>Exported ${now}</em></p><hr>${rows}</body></html>`;
-      dl(html, `${slug}.doc`, "application/msword");
-
-    } else if (format === "txt") {
-      const txt = [`Chat with ${name}`, `Exported: ${now}`, "=".repeat(50), ""].concat(
-        msgs_.map(m => {
-          if (m.role === "user") return `YOU:\n${m.text}\n`;
-          if (m.role === "pipeline") return `[PIPELINE: ${m.skill_name}]\n${(m.steps_output||[]).map(s=>`  ${s.label}: ${s.output}`).join("\n")}\n`;
-          return `${name.toUpperCase()}:\n${m.text || m.final_output}\n`;
-        })
-      ).join("\n" + "-".repeat(40) + "\n");
-      dl(txt, `${slug}.txt`, "text/plain");
-
-    } else if (format === "pptx_html") {
-      // Slide-style HTML presentation (works in browsers, printable)
-      const agentMsgs = msgs_.filter(m => m.role === "agent" || m.role === "pipeline");
-      const slides = agentMsgs.map((m, i) => {
-        const text = (m.text || m.final_output || "").trim();
-        // First 100 chars as title, rest as body
-        const sentences = text.split(/(?<=[.!?])\s+/);
-        const title = sentences[0]?.slice(0,120) || `Slide ${i+1}`;
-        const body = sentences.slice(1).join(" ");
-        return `<section class="slide">
-  <div class="slide-num">${i+1} / ${agentMsgs.length}</div>
-  <h2>${title.replace(/</g,"&lt;")}</h2>
-  <p>${body.replace(/</g,"&lt;").replace(/\n/g,"<br>")}</p>
-</section>`;
-      });
-      const pptHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${name} — Presentation</title>
-<style>
-@page{size:landscape;margin:0}
-body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#1a1a2e}
-.slide{width:100vw;min-height:100vh;display:flex;flex-direction:column;justify-content:center;
-  padding:60px 80px;box-sizing:border-box;background:linear-gradient(135deg,#1a1a2e,#16213e);
-  color:#eee;page-break-after:always;border-bottom:4px solid #0f3460}
-.slide-num{position:absolute;top:20px;right:30px;font-size:12px;color:#555}
-h2{font-size:28px;font-weight:700;margin-bottom:20px;color:#e94560;line-height:1.3}
-p{font-size:16px;line-height:1.8;color:#ccc;max-width:900px}
-@media print{body{background:#fff}.slide{background:#fff;border-bottom:2px solid #333}h2{color:#1a1a2e}p{color:#333}}
-</style></head><body>${slides.join("\n")}</body></html>`;
-      dl(pptHtml, `${slug}-slides.html`, "text/html");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([md], { type: "text/markdown" }));
+      a.download = `chat-${agent.name}-${Date.now()}.md`;
+      a.click();
     }
   };
 
@@ -1579,13 +1527,9 @@ p{font-size:16px;line-height:1.8;color:#ccc;max-width:900px}
         {msgs.length > 0 && (<>
           <div style={{ position:"relative" }}>
             <button className="btn btn-ghost btn-sm" id="export-chat-btn" onClick={() => { const m=document.getElementById("export-chat-menu"); m.style.display=m.style.display==="none"?"block":"none"; }}>↓ Export</button>
-            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:160, zIndex:9999 }}>
-              <div style={{ fontSize:10, color:C.dim, padding:"4px 10px 2px", fontWeight:700, letterSpacing:1 }}>EXPORT AS</div>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown (.md)</button>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("txt"); document.getElementById("export-chat-menu").style.display="none"; }}>📝 Plain Text (.txt)</button>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("html"); document.getElementById("export-chat-menu").style.display="none"; }}>📃 Word Doc (.doc)</button>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("pptx_html"); document.getElementById("export-chat-menu").style.display="none"; }}>📊 Presentation (.html)</button>
-              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>⬡ JSON (.json)</button>
+            <div id="export-chat-menu" style={{ display:"none", position:"absolute", right:0, top:"110%", background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:4, minWidth:140, zIndex:9999 }}>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("md"); document.getElementById("export-chat-menu").style.display="none"; }}>📄 Markdown</button>
+              <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ exportChat("json"); document.getElementById("export-chat-menu").style.display="none"; }}>{ } JSON</button>
               <button className="nav-item" style={{ width:"100%", margin:0 }} onClick={()=>{ window.print(); document.getElementById("export-chat-menu").style.display="none"; }}>🖨 Print / PDF</button>
             </div>
           </div>
@@ -1639,7 +1583,43 @@ p{font-size:16px;line-height:1.8;color:#ccc;max-width:900px}
                 <SlidesDeck text={m.text} />
               </div>
             ) : (
-              <div className={`msg msg-${m.role}`}>{m.text}</div>
+              <div className={`msg msg-${m.role}`}>
+                {m.text}
+                {m.role === "agent" && m.text && m.meta !== "error" && m.meta !== "system" && (
+                  <div style={{ marginTop:6, display:"flex", gap:4, flexWrap:"wrap" }}>
+                    <button title="Save as plain text" onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(new Blob([m.text], {type:"text/plain"}));
+                      a.download = `response-${Date.now()}.txt`; a.click();
+                    }} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ TXT</button>
+                    <button title="Save as Markdown" onClick={() => {
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(new Blob([`# ${agent.name}\n\n${m.text}`], {type:"text/markdown"}));
+                      a.download = `response-${Date.now()}.md`; a.click();
+                    }} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ MD</button>
+                    <button title="Save as Word document" onClick={() => {
+                      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${agent.name}</title>
+<style>body{font-family:Calibri,Arial,sans-serif;max-width:800px;margin:40px auto;font-size:12pt;line-height:1.6}
+h1{font-size:16pt;color:#1a1a2e}</style></head><body>
+<h1>${agent.name}</h1><p><em>${new Date().toLocaleString()}</em></p><hr>
+<div>${m.text.replace(/\n/g,"<br>")}</div></body></html>`;
+                      const a = document.createElement("a");
+                      a.href = URL.createObjectURL(new Blob([html], {type:"application/msword"}));
+                      a.download = `response-${Date.now()}.doc`; a.click();
+                    }} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ DOC</button>
+                    <button title="Print this response as PDF" onClick={() => {
+                      const win = window.open("","_blank");
+                      win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${agent.name}</title>
+<style>@page{margin:2cm}body{font-family:Calibri,Arial,sans-serif;font-size:12pt;line-height:1.7;color:#111}
+h1{font-size:16pt;color:#1a1a2e;border-bottom:2px solid #eee;padding-bottom:6px}</style></head><body>
+<h1>${agent.name}</h1><p><em>${new Date().toLocaleString()}</em></p><hr>
+<div>${m.text.replace(/</g,"&lt;").replace(/\n/g,"<br>")}</div>
+<script>window.onload=()=>{window.print();window.close();}<\/script></body></html>`);
+                      win.document.close();
+                    }} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ PDF</button>
+                  </div>
+                )}
+              </div>
             )}
             {m.meta && m.role !== "pipeline" && (
               <div className="msg-meta" style={{ justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
@@ -2198,6 +2178,199 @@ function HelpPage() {
   );
 }
 
+// ─── AI CREATOR WIZARD ────────────────────────────────────────────────────
+// Guided AI chat that builds a complete agent or skill config for you.
+const CREATOR_SYSTEM = `You are an expert AgentOps setup assistant. Your job is to help the user create a perfectly configured AI agent or skill through friendly conversation.
+
+When creating an AGENT, you need to gather:
+- Purpose / what it does
+- Industry or domain
+- Which AI provider to use (claude, gemini, openai, deepseek, groq, openrouter)
+- Tone and style (formal, casual, technical, etc.)
+- Any specific skills or tools it should use
+
+When creating a SKILL, you need to gather:
+- What task it performs
+- Whether it's single-step or multi-step pipeline
+- Which providers each step should use
+
+Ask ONE question at a time. Be concise and friendly. When you have enough information (after 3-5 exchanges), output a JSON block wrapped in triple backticks with the key "type": "agent" or "type": "skill" and all required fields. Do not explain the JSON — just output it cleanly.
+
+Agent JSON schema:
+\`\`\`json
+{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-sonnet-4-6","fallback_provider":"gemini","fallback_model":"gemini-1.5-flash-latest","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
+\`\`\`
+
+Skill JSON schema:
+\`\`\`json
+{"type":"skill","name":"","identifier":"","category":"analysis","description":"","output_type":"text","pipeline_steps":[]}
+\`\`\`
+
+Start by asking: "What would you like to create — an Agent (AI assistant you can chat with) or a Skill (a reusable task)?"`;
+
+function CreatorPage({ agents, setAgents, skills, setSkills }) {
+  const [msgs, setMsgs] = useState([
+    { role:"agent", text:"Hi! I'm your AI setup assistant. What would you like to create?\n\n**Agent** — an AI assistant you configure and chat with\n**Skill** — a reusable task or pipeline an agent can run\n\nJust describe what you need and I'll guide you through it.", ts:new Date() }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const bottomRef = useRef(null);
+  const msgsRef = useRef(msgs);
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
+
+  const extractJSON = (text) => {
+    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (!match) return null;
+    try { return JSON.parse(match[1].trim()); } catch { return null; }
+  };
+
+  const send = async () => {
+    if (!input.trim() || loading) return;
+    const userText = input.trim();
+    setInput("");
+    const history = msgsRef.current;
+    setMsgs(m => [...m, { role:"user", text:userText, ts:new Date() }]);
+    setLoading(true);
+    // Try providers in order: Claude → Gemini → OpenRouter (free)
+    const chatMessages = [
+      ...history.filter(m=>m.role==="user"||m.role==="agent").map(m=>({ role:m.role==="agent"?"assistant":"user", content:m.text })),
+      { role:"user", content:userText }
+    ];
+    const attempts = [
+      { provider:"claude",      model:"claude-sonnet-4-6" },
+      { provider:"gemini",      model:"gemini-1.5-flash-latest" },
+      { provider:"openrouter",  model:"meta-llama/llama-4-scout:free" },
+    ];
+    let responseText = "";
+    let lastErr = "";
+    for (const attempt of attempts) {
+      try {
+        const r = await fetch("/api/chat", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({
+            provider: attempt.provider, model: attempt.model,
+            system_prompt: CREATOR_SYSTEM,
+            messages: chatMessages,
+            max_tokens: 1200, temperature: 0.6,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { lastErr = data?.error || `Error ${r.status}`; continue; }
+        responseText = data.response || "";
+        break;
+      } catch(e) { lastErr = e.message; }
+    }
+    try {
+      if (!responseText) throw new Error(lastErr || "All providers failed. Check your API keys.");
+      setMsgs(m => [...m, { role:"agent", text:responseText, ts:new Date() }]);
+      const parsed = extractJSON(responseText);
+      if (parsed) setPreview(parsed);
+    } catch(e) {
+      setMsgs(m => [...m, { role:"agent", text:`⚠ ${e.message}`, meta:"error", ts:new Date() }]);
+    } finally { setLoading(false); }
+  };
+
+  const savePreview = async () => {
+    if (!preview) return;
+    setSaving(true);
+    try {
+      if (preview.type === "agent") {
+        const payload = {
+          name: preview.name, persona: preview.persona || "researcher",
+          primary_provider: preview.primary_provider || "claude",
+          primary_model: preview.primary_model || "claude-sonnet-4-6",
+          fallback_provider: preview.fallback_provider || null,
+          fallback_model: preview.fallback_model || null,
+          description: preview.description || "",
+          system_prompt: preview.system_prompt || "",
+          temperature: parseFloat(preview.temperature) || 0.7,
+          max_tokens: parseInt(preview.max_tokens) || 4096,
+          status: "active", provider_chain: [preview.primary_provider],
+          total_runs: 0, total_tokens: 0,
+        };
+        const created = await supa.post("agents", payload);
+        const item = Array.isArray(created)?created[0]:created;
+        if (item?.id) setAgents(p => [...p, item]);
+      } else {
+        const id = preview.identifier || preview.name?.toLowerCase().replace(/\s+/g,"_")||"skill_"+Date.now();
+        const payload = {
+          name: preview.name, identifier: id,
+          category: preview.category || "general",
+          description: preview.description || "",
+          output_type: preview.output_type || "text",
+          pipeline_steps: preview.pipeline_steps || [],
+          is_active: true, permissions: "read", rate_limit: 100,
+          tags: [], parameters: {},
+        };
+        const created = await supa.post("skills", payload);
+        const item = Array.isArray(created)?created[0]:created;
+        if (item?.id) setSkills(p => [...p, item]);
+      }
+      setSaved(true);
+      setTimeout(()=>setSaved(false), 3000);
+      setPreview(null);
+      setMsgs(m => [...m, { role:"agent", text:`✅ ${preview.type === "agent" ? "Agent" : "Skill"} **${preview.name}** has been saved! You can find it in the ${preview.type === "agent" ? "Agents" : "Skills"} page.\n\nWould you like to create another one?`, ts:new Date() }]);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%", maxWidth:720 }}>
+      <div style={{ background:C.accent+"12", border:`1px solid ${C.accent}30`, borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.accentHi, lineHeight:1.6 }}>
+        ✨ <strong>AI Creator</strong> — Describe what you need and I'll configure everything for you automatically. Requires Claude or Gemini API key.
+      </div>
+
+      <div style={{ flex:1, overflowY:"auto", display:"flex", flexDirection:"column", gap:10, marginBottom:12 }}>
+        {msgs.map((m, i) => (
+          <div key={i} style={{ display:"flex", justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+            <div style={{
+              maxWidth:"80%", padding:"10px 14px", borderRadius:m.role==="user"?"12px 12px 4px 12px":"12px 12px 12px 4px",
+              background:m.role==="user"?C.accent:C.card, color:m.meta==="error"?C.red:C.text,
+              border:`1px solid ${m.role==="user"?C.accent:C.border}`, fontSize:12, lineHeight:1.7,
+              whiteSpace:"pre-wrap"
+            }}>{m.text}</div>
+          </div>
+        ))}
+        {loading && <div style={{ color:C.muted, fontSize:12 }}><Spinner /> Thinking…</div>}
+        <div ref={bottomRef} />
+      </div>
+
+      {preview && (
+        <div style={{ background:C.green+"0f", border:`1px solid ${C.green}30`, borderRadius:9, padding:"12px 14px", marginBottom:12 }}>
+          <div style={{ fontWeight:700, fontSize:12, color:C.green, marginBottom:8 }}>
+            ✓ Ready to save: {preview.type === "agent" ? "Agent" : "Skill"} — <strong>{preview.name}</strong>
+          </div>
+          <div style={{ fontSize:11, color:C.muted, marginBottom:10, lineHeight:1.6 }}>
+            {preview.type === "agent"
+              ? `Provider: ${preview.primary_provider} (${preview.primary_model}) · Fallback: ${preview.fallback_provider||"none"}`
+              : `Category: ${preview.category} · Type: ${preview.output_type}`}
+          </div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button className="btn btn-primary" onClick={savePreview} disabled={saving}>
+              {saving ? <Spinner /> : saved ? "✓ Saved!" : `Save ${preview.type === "agent" ? "Agent" : "Skill"}`}
+            </button>
+            <button className="btn btn-ghost" onClick={()=>setPreview(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:"flex", gap:8 }}>
+        <textarea className="chat-input" rows={2} value={input}
+          placeholder="Describe your agent or skill… (Enter to send)"
+          onChange={e=>setInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); } }}
+          style={{ flex:1 }} />
+        <button className="btn btn-primary" onClick={send} disabled={loading||!input.trim()} style={{ alignSelf:"flex-end" }}>
+          {loading?<Spinner />:"Send ↑"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
 const NAV = [
   { id:"command",    icon:"◎", label:"Command Center", group:"main" },
@@ -2209,6 +2382,7 @@ const NAV = [
   { id:"audit",      icon:"▦", label:"Audit Log",       group:"data" },
   { id:"database",   icon:"⬟", label:"Database",        group:"data" },
   { id:"apikeys",    icon:"🔑", label:"API Keys",        group:"data" },
+  { id:"creator",    icon:"✨", label:"AI Creator",      group:"main" },
   { id:"help",       icon:"?", label:"Help & Guide",    group:"data" },
 ];
 
@@ -2339,6 +2513,7 @@ export default function App() {
               {page==="help"      && <HelpPage />}
               {page==="database"  && <DatabasePage agents={agents} skills={skills} runs={runs} />}
               {page==="apikeys"   && <ApiKeysPage />}
+              {page==="creator"   && <CreatorPage agents={agents} setAgents={setAgents} skills={skills} setSkills={setSkills} />}
             </div>
           )}
 
