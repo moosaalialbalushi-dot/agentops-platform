@@ -161,13 +161,12 @@ const MODELS_BY_PROVIDER = {
     "claude-3-opus-20240229",
   ],
   gemini:     [
-    "gemini-1.5-flash-latest",    // stable default — recommended
-    "gemini-1.5-pro-latest",      // more capable, higher quota
-    "gemini-2.5-pro-preview-05-06",
-    "gemini-2.5-flash-preview-05-20",
-    "gemini-1.5-flash-latest-lite",
-    "gemini-1.5-pro-002",
-    "gemini-1.5-flash-002",
+    "gemini-2.5-flash-preview-05-20",  // latest Flash — fast, recommended default
+    "gemini-2.5-pro-preview-05-06",    // latest Pro — most capable
+    "gemini-2.0-flash",                // stable Flash (paid accounts)
+    "gemini-2.0-flash-lite",           // lightest / cheapest
+    "gemini-1.5-pro-latest",           // proven Pro
+    "gemini-2.5-flash-preview-05-20",         // proven Flash
   ],
   deepseek:   ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
   openai:     [
@@ -626,7 +625,7 @@ function AgentsPage({ agents, setAgents, skills, onChat, loading }) {
     name:"", persona:"researcher", description:"", status:"idle",
     primary_provider:"claude", fallback_provider:"gemini",
     provider_chain: ["claude","gemini"],
-    primary_model:"claude-sonnet-4-6", fallback_model:"gemini-1.5-flash-latest",
+    primary_model:"claude-sonnet-4-6", fallback_model:"gemini-2.5-flash-preview-05-20",
     system_prompt:"You are a helpful AI agent. When asked to produce reports, analyses, or documents, output the complete final document in a single response — do not ask clarifying questions or provide partial drafts. Format output clearly with headings and sections.", temperature:0.7, max_tokens:4096,
     total_runs:0, total_tokens:0,
   };
@@ -2198,7 +2197,7 @@ Ask ONE question at a time. Be concise and friendly. When you have enough inform
 
 Agent JSON schema:
 \`\`\`json
-{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-sonnet-4-6","fallback_provider":"gemini","fallback_model":"gemini-1.5-flash-latest","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
+{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-sonnet-4-6","fallback_provider":"gemini","fallback_model":"gemini-2.5-flash-preview-05-20","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
 \`\`\`
 
 Skill JSON schema:
@@ -2242,7 +2241,7 @@ function CreatorPage({ agents, setAgents, skills, setSkills }) {
     ];
     const attempts = [
       { provider:"claude",      model:"claude-sonnet-4-6" },
-      { provider:"gemini",      model:"gemini-1.5-flash-latest" },
+      { provider:"gemini",      model:"gemini-2.5-flash-preview-05-20" },
       { provider:"openrouter",  model:"meta-llama/llama-4-scout:free" },
     ];
     let responseText = "";

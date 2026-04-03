@@ -158,7 +158,7 @@ async function executeStep(step: any, input: string, prevOutput: string): Promis
       return callClaude(model || "claude-sonnet-4-6", systemPrompt, msgs, maxTokens, temp);
 
     case "gemini":
-      return callGemini(model || "gemini-1.5-flash-latest", systemPrompt, msgs, maxTokens, temp);
+      return callGemini(model || "gemini-2.5-flash-preview-05-20", systemPrompt, msgs, maxTokens, temp);
 
     case "openai":
       return callOpenAICompat(
