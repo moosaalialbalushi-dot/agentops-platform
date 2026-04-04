@@ -2234,15 +2234,15 @@ function CreatorPage({ agents, setAgents, skills, setSkills }) {
     const history = msgsRef.current;
     setMsgs(m => [...m, { role:"user", text:userText, ts:new Date() }]);
     setLoading(true);
-    // Try providers in order: Claude → Gemini → OpenRouter (free)
+    // Try providers in order: Gemini → Claude → OpenRouter (free)
     const chatMessages = [
       ...history.filter(m=>m.role==="user"||m.role==="agent").map(m=>({ role:m.role==="agent"?"assistant":"user", content:m.text })),
       { role:"user", content:userText }
     ];
     const attempts = [
-      { provider:"claude",      model:"claude-sonnet-4-6" },
       { provider:"gemini",      model:"gemini-2.5-flash-preview-05-20" },
-      { provider:"openrouter",  model:"meta-llama/llama-4-scout:free" },
+      { provider:"claude",      model:"claude-sonnet-4-6" },
+      { provider:"openrouter",  model:"google/gemma-3-27b-it:free" },
     ];
     let responseText = "";
     let lastErr = "";
@@ -2412,6 +2412,8 @@ export default function App() {
     setConversations(Array.isArray(cv)?cv:[]);
     if (!chatAgent && Array.isArray(a) && a.length>0) setChatAgent(a[0]);
     setLoading(false);
+    // Load provider status in background
+    fetch("/api/status").then(r=>r.json()).then(d=>{ if(d?.providers) setProviderStatus(d.providers); }).catch(()=>{});
   };
 
   useEffect(() => { loadData(); }, []);
@@ -2457,14 +2459,15 @@ export default function App() {
             ))}
 
             <div className="nav-section">AI Providers</div>
-            {Object.entries(PROVIDERS).slice(0,4).map(([key,p]) => {
-              const isConfigured = agents.some(a=>a.primary_provider===key||a.fallback_provider===key);
+            {(["claude","gemini","openrouter","deepseek","openai","groq"]).map(key => {
+              const p = PROVIDERS[key]; if (!p) return null;
+              const isOn = providerStatus[key] ?? false;
               return (
                 <div key={key} className="provider-row" onClick={() => setPage("apikeys")}>
                   <span className="provider-dot" style={{ background:p.color }} />
                   <span style={{ color:C.muted, flex:1, fontSize:11 }}>{p.label}</span>
-                  <span className="provider-status" style={{ background:isConfigured?C.green+"18":C.dim+"18", color:isConfigured?C.green:C.dim }}>
-                    {isConfigured?"ON":"OFF"}
+                  <span className="provider-status" style={{ background:isOn?C.green+"18":C.dim+"18", color:isOn?C.green:C.dim }}>
+                    {isOn?"ON":"OFF"}
                   </span>
                 </div>
               );
