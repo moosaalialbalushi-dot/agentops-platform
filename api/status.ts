@@ -20,6 +20,7 @@ export default function handler(req: any, res: any) {
     mistral:     !!process.env.MISTRAL_API_KEY,
     cohere:      !!process.env.COHERE_API_KEY,
     openrouter:  !!process.env.OPENROUTER_API_KEY,
+    zhipu:       !!process.env.ZHIPU_API_KEY,
     notebooklm:  !!process.env.GEMINI_API_KEY,  // uses Gemini key
     imagen:      !!process.env.GEMINI_API_KEY,  // uses Gemini key
     veo:         !!process.env.GEMINI_API_KEY,  // uses Gemini key

@@ -144,6 +144,7 @@ const PROVIDERS = {
   mistral:     { label: "Mistral",     color: "#ff7000", logo: "◐" },
   cohere:      { label: "Cohere",      color: "#39594d", logo: "◑" },
   groq:        { label: "Groq",        color: "#f55036", logo: "◧" },
+  zhipu:       { label: "Z AI (Zhipu)", color: "#00b4d8", logo: "Z" },
   openrouter:  { label: "OpenRouter",  color: "#7c3aed", logo: "⊛" },
   notebooklm:  { label: "NotebookLM",  color: "#1a73e8", logo: "⊞" },
   imagen:      { label: "Imagen",      color: "#34a853", logo: "⬡" },
@@ -217,6 +218,14 @@ const MODELS_BY_PROVIDER = {
     "cohere/command-r-plus",
     "x-ai/grok-3",
     "perplexity/sonar-pro",
+  ],
+  zhipu: [
+    "glm-4-flash",          // fastest, free tier — recommended default
+    "glm-4-plus",           // most capable GLM-4
+    "glm-4",                // standard GLM-4
+    "glm-4v",               // vision (images)
+    "glm-z1-flash",         // reasoning model (fast)
+    "glm-z1-air",           // reasoning model (standard)
   ],
   notebooklm: [
     "notebooklm-research",
@@ -1760,6 +1769,7 @@ function RunHistoryPage({ runs, agents }) {
 const ENV_KEY_DEFS = [
   { env:"ANTHROPIC_API_KEY",  provider:"claude",     label:"Claude (Anthropic)", logo:"◆", color:"#d97706", hint:"sk-ant-api03-...", where:"console.anthropic.com → API Keys" },
   { env:"GEMINI_API_KEY",     provider:"gemini",     label:"Google Gemini / Imagen / NotebookLM / Veo", logo:"✦", color:"#4285f4", hint:"AIzaSy...", where:"aistudio.google.com → Get API key" },
+  { env:"ZHIPU_API_KEY",      provider:"zhipu",      label:"Z AI — Zhipu (GLM-4, GLM-Z1 reasoning)", logo:"Z", color:"#00b4d8", hint:"your-zhipu-key", where:"bigmodel.cn → API Keys" },
   { env:"OPENROUTER_API_KEY", provider:"openrouter", label:"OpenRouter (300+ models, free + paid)", logo:"⊛", color:"#7c3aed", hint:"sk-or-v1-...", where:"openrouter.ai/keys" },
   { env:"DEEPSEEK_API_KEY",   provider:"deepseek",   label:"DeepSeek", logo:"◉", color:"#10b981", hint:"sk-...", where:"platform.deepseek.com → API keys" },
   { env:"OPENAI_API_KEY",     provider:"openai",     label:"OpenAI (GPT-4, o3, DALL-E)", logo:"⊕", color:"#74aa9c", hint:"sk-proj-...", where:"platform.openai.com/api-keys" },
@@ -2234,15 +2244,15 @@ function CreatorPage({ agents, setAgents, skills, setSkills }) {
     const history = msgsRef.current;
     setMsgs(m => [...m, { role:"user", text:userText, ts:new Date() }]);
     setLoading(true);
-    // Try providers in order: Gemini → Claude → OpenRouter (free)
+    // Try providers in order: Claude → Gemini → Z AI (Zhipu)
     const chatMessages = [
       ...history.filter(m=>m.role==="user"||m.role==="agent").map(m=>({ role:m.role==="agent"?"assistant":"user", content:m.text })),
       { role:"user", content:userText }
     ];
     const attempts = [
-      { provider:"gemini",      model:"gemini-2.5-flash-preview-05-20" },
-      { provider:"claude",      model:"claude-sonnet-4-6" },
-      { provider:"openrouter",  model:"google/gemma-3-27b-it:free" },
+      { provider:"claude",  model:"claude-sonnet-4-6" },
+      { provider:"gemini",  model:"gemini-2.5-flash-preview-05-20" },
+      { provider:"zhipu",   model:"glm-4-flash" },
     ];
     let responseText = "";
     let lastErr = "";
@@ -2370,6 +2380,308 @@ function CreatorPage({ agents, setAgents, skills, setSkills }) {
   );
 }
 
+// ─── PLAYGROUND PAGE ──────────────────────────────────────────────────────
+function PlaygroundPage({ skills }) {
+  const [provider, setProvider] = useState("claude");
+  const [model, setModel] = useState("claude-sonnet-4-6");
+  const [systemPrompt, setSystemPrompt] = useState("You are a helpful AI assistant. Provide complete, well-structured responses.");
+  const [temperature, setTemperature] = useState(0.7);
+  const [maxTokens, setMaxTokens] = useState(4096);
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showSystem, setShowSystem] = useState(false);
+  const [pipeline, setPipeline] = useState([]); // skills queued for chaining
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineResults, setPipelineResults] = useState([]);
+  const [tab, setTab] = useState("chat"); // "chat" | "skills"
+  const bottomRef = useRef(null);
+  const msgsRef = useRef([]);
+  useEffect(() => { msgsRef.current = msgs; }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs, pipelineResults]);
+
+  const S = {
+    wrap: { display:"flex", flexDirection:"column", height:"100%", overflow:"hidden" },
+    topbar: { display:"flex", gap:8, alignItems:"center", padding:"12px 16px", borderBottom:`1px solid ${C.border}`, flexWrap:"wrap", flexShrink:0 },
+    tabBar: { display:"flex", borderBottom:`1px solid ${C.border}`, flexShrink:0 },
+    tab: (active) => ({ padding:"8px 18px", fontSize:12, fontWeight:700, cursor:"pointer", border:"none", background:"none",
+      color:active?C.text:C.muted, borderBottom:active?`2px solid ${C.accent}`:"2px solid transparent" }),
+    msgArea: { flex:1, overflowY:"auto", padding:"16px", display:"flex", flexDirection:"column", gap:10 },
+    inputRow: { display:"flex", gap:8, padding:"12px 16px", borderTop:`1px solid ${C.border}`, flexShrink:0, alignItems:"flex-end" },
+    skillsArea: { flex:1, overflowY:"auto", padding:16 },
+    skillCard: { background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"10px 14px", marginBottom:8,
+      display:"flex", alignItems:"center", gap:10, cursor:"pointer" },
+    queueCard: { background:C.accent+"15", border:`1px solid ${C.accent}`, borderRadius:8, padding:"10px 14px", marginBottom:8,
+      display:"flex", alignItems:"center", gap:10 },
+    resultCard: { background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:12, marginBottom:10 },
+    select: { background:C.bg, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, padding:"4px 8px" },
+    label: { fontSize:11, color:C.dim, marginRight:4 },
+  };
+
+  const send = async () => {
+    if (!input.trim() || loading) return;
+    const userText = input.trim();
+    setInput("");
+    const history = msgsRef.current;
+    setMsgs(m => [...m, { role:"user", text:userText, ts:new Date() }]);
+    setLoading(true);
+    try {
+      const r = await fetch("/api/chat", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          provider, model,
+          system_prompt: systemPrompt,
+          messages: [
+            ...history.filter(m=>m.role==="user"||m.role==="agent").map(m=>({ role:m.role==="agent"?"assistant":"user", content:m.text })),
+            { role:"user", content:userText },
+          ],
+          max_tokens: maxTokens, temperature,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
+      const resp = data.response || "";
+      setMsgs(m => [...m, { role:"agent", text:resp, meta:`${data.provider_used} · ${data.model_used} · ${data.tokens_used}tok · ${data.latency_ms}ms`, ts:new Date() }]);
+    } catch(e) {
+      setMsgs(m => [...m, { role:"agent", text:`⚠ ${e.message}`, meta:"error", ts:new Date() }]);
+    } finally { setLoading(false); }
+  };
+
+  const addToPipeline = (skill) => {
+    if (pipeline.find(s => s.id === skill.id)) return;
+    setPipeline(p => [...p, skill]);
+  };
+
+  const runPipeline = async () => {
+    if (pipeline.length === 0 || !input.trim()) return;
+    setPipelineRunning(true);
+    setPipelineResults([]);
+    let currentInput = input.trim();
+    const results = [];
+    for (const skill of pipeline) {
+      const steps = skill.pipeline_steps || [];
+      if (steps.length === 0) {
+        results.push({ skill: skill.name, output: "No pipeline steps configured.", error: true });
+        continue;
+      }
+      try {
+        const r = await fetch("/api/pipeline", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ skill_id: skill.id, input: currentInput }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error || `Error ${r.status}`);
+        const out = data.final_output || data.steps?.slice(-1)[0]?.output || "";
+        results.push({ skill: skill.name, output: out, tokens: data.total_tokens, latency: data.total_latency_ms });
+        currentInput = out; // chain: output becomes next input
+      } catch(e) {
+        results.push({ skill: skill.name, output: e.message, error: true });
+        break;
+      }
+      setPipelineResults([...results]);
+    }
+    setPipelineRunning(false);
+  };
+
+  const dlResult = (text, ext, mime) => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], {type:mime}));
+    a.download = `playground-${Date.now()}.${ext}`; a.click();
+  };
+
+  // When provider changes, auto-select first model for that provider
+  const handleProviderChange = (p) => {
+    setProvider(p);
+    const first = MODELS_BY_PROVIDER[p]?.[0] || "";
+    setModel(first);
+  };
+
+  return (
+    <div style={S.wrap}>
+      {/* ── Top controls bar ── */}
+      <div style={S.topbar}>
+        <span style={{ fontFamily:"'Syne',sans-serif", fontSize:13, fontWeight:800, color:C.text, marginRight:4 }}>⚡ Playground</span>
+        <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={S.label}>Provider</span>
+          <select style={S.select} value={provider} onChange={e=>handleProviderChange(e.target.value)}>
+            {Object.entries(PROVIDERS).filter(([k])=>!["notebooklm","imagen","veo","custom"].includes(k)).map(([k,p])=>(
+              <option key={k} value={k}>{p.logo} {p.label}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={S.label}>Model</span>
+          <select style={S.select} value={model} onChange={e=>setModel(e.target.value)}>
+            {(MODELS_BY_PROVIDER[provider]||[]).map(m=><option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={S.label}>Temp</span>
+          <input type="number" min="0" max="2" step="0.1" value={temperature}
+            onChange={e=>setTemperature(parseFloat(e.target.value))}
+            style={{ ...S.select, width:54 }} />
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:4 }}>
+          <span style={S.label}>Max tokens</span>
+          <input type="number" min="100" max="8000" step="100" value={maxTokens}
+            onChange={e=>setMaxTokens(parseInt(e.target.value))}
+            style={{ ...S.select, width:70 }} />
+        </div>
+        <button className="btn btn-ghost btn-sm" onClick={()=>setShowSystem(s=>!s)}>
+          {showSystem?"▲":"▼"} System prompt
+        </button>
+        <button className="btn btn-ghost btn-sm" onClick={()=>{ setMsgs([]); setPipelineResults([]); }}>Clear</button>
+      </div>
+
+      {/* ── System prompt editor ── */}
+      {showSystem && (
+        <div style={{ padding:"8px 16px", borderBottom:`1px solid ${C.border}`, flexShrink:0 }}>
+          <textarea value={systemPrompt} onChange={e=>setSystemPrompt(e.target.value)} rows={3}
+            style={{ width:"100%", background:C.card, border:`1px solid ${C.border}`, borderRadius:6,
+              color:C.text, fontSize:12, padding:"8px 10px", resize:"vertical", boxSizing:"border-box" }}
+            placeholder="System prompt — instructions for how the AI should behave..." />
+        </div>
+      )}
+
+      {/* ── Tab bar ── */}
+      <div style={S.tabBar}>
+        <button style={S.tab(tab==="chat")} onClick={()=>setTab("chat")}>💬 Chat</button>
+        <button style={S.tab(tab==="skills")} onClick={()=>setTab("skills")}>◈ Skills Pipeline ({pipeline.length} queued)</button>
+      </div>
+
+      {/* ── CHAT TAB ── */}
+      {tab === "chat" && (<>
+        <div style={S.msgArea}>
+          {msgs.length === 0 && (
+            <div style={{ textAlign:"center", padding:"40px 20px", color:C.muted }}>
+              <div style={{ fontSize:36, marginBottom:10 }}>⚡</div>
+              <div style={{ fontFamily:"'Syne',sans-serif", fontSize:14, fontWeight:800, color:C.text, marginBottom:6 }}>Playground</div>
+              <div style={{ fontSize:12, maxWidth:340, margin:"0 auto", lineHeight:1.8 }}>
+                Direct chat with any AI model. No agent setup required.<br/>
+                Switch providers and models any time.
+              </div>
+            </div>
+          )}
+          {msgs.map((m, i) => (
+            <div key={i}>
+              <div className={`msg msg-${m.role}`}>
+                {m.text}
+                {m.role === "agent" && m.meta !== "error" && (
+                  <div style={{ marginTop:6, display:"flex", gap:4, flexWrap:"wrap" }}>
+                    {[["TXT","txt","text/plain",m.text],["MD","md","text/markdown",`# Response\n\n${m.text}`],
+                      ["DOC","doc","application/msword",`<!DOCTYPE html><html><body>${m.text.replace(/\n/g,"<br>")}</body></html>`]
+                    ].map(([label,ext,mime,content])=>(
+                      <button key={label} onClick={()=>dlResult(content,ext,mime)}
+                        style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>
+                        ↓ {label}
+                      </button>
+                    ))}
+                    <button onClick={()=>{
+                      const win=window.open("","_blank");
+                      win.document.write(`<!DOCTYPE html><html><head><style>@page{margin:2cm}body{font-family:Calibri,sans-serif;font-size:12pt;line-height:1.7}</style></head><body>${m.text.replace(/</g,"&lt;").replace(/\n/g,"<br>")}<script>window.onload=()=>{window.print();window.close();}<\/script></body></html>`);
+                      win.document.close();
+                    }} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ PDF</button>
+                  </div>
+                )}
+              </div>
+              {m.meta && <div className="msg-meta" style={{ justifyContent:m.role==="user"?"flex-end":"flex-start" }}>
+                <span style={{ color:m.meta==="error"?C.red:C.muted }}>{m.meta==="error"?"error":m.meta}</span>
+              </div>}
+            </div>
+          ))}
+          {loading && <div className="msg msg-agent" style={{ display:"flex", gap:8, alignItems:"center", color:C.muted }}><Spinner /> Thinking…</div>}
+          <div ref={bottomRef} />
+        </div>
+        <div style={S.inputRow}>
+          <textarea className="chat-input" rows={2} value={input} placeholder="Message the AI… (Enter to send, Shift+Enter for new line)"
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); send(); } }}
+            style={{ flex:1 }} />
+          <button className="btn btn-primary" onClick={send} disabled={loading||!input.trim()} style={{ alignSelf:"flex-end" }}>
+            {loading?<Spinner />:"Send ↑"}
+          </button>
+        </div>
+      </>)}
+
+      {/* ── SKILLS PIPELINE TAB ── */}
+      {tab === "skills" && (
+        <div style={{ display:"flex", flex:1, overflow:"hidden" }}>
+          {/* Left: available skills */}
+          <div style={{ flex:1, overflowY:"auto", padding:16, borderRight:`1px solid ${C.border}` }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.dim, marginBottom:10, letterSpacing:1 }}>AVAILABLE SKILLS — click to add</div>
+            {skills.length === 0 && <div style={{ fontSize:12, color:C.muted }}>No skills created yet. Go to Skills to create some.</div>}
+            {skills.map(sk => (
+              <div key={sk.id} style={{...S.skillCard, opacity: pipeline.find(s=>s.id===sk.id)?0.4:1 }}
+                onClick={() => addToPipeline(sk)}>
+                <span style={{ fontSize:18 }}>◈</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:C.text }}>{sk.name}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>{sk.description || sk.category}</div>
+                </div>
+                <span style={{ fontSize:11, color:C.accent }}>+ Add</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Right: pipeline queue + run */}
+          <div style={{ width:340, overflowY:"auto", padding:16, display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.dim, letterSpacing:1 }}>PIPELINE QUEUE (runs top → bottom)</div>
+            {pipeline.length === 0 && (
+              <div style={{ fontSize:12, color:C.muted, padding:"20px 0" }}>Add skills from the left. They will run in order, each output feeding into the next.</div>
+            )}
+            {pipeline.map((sk, i) => (
+              <div key={sk.id} style={S.queueCard}>
+                <span style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:11, color:C.accent, width:20 }}>#{i+1}</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:C.text }}>{sk.name}</div>
+                  <div style={{ fontSize:11, color:C.muted }}>{(sk.pipeline_steps||[]).length} step{(sk.pipeline_steps||[]).length!==1?"s":""}</div>
+                </div>
+                <button onClick={()=>setPipeline(p=>p.filter(s=>s.id!==sk.id))}
+                  style={{ background:"none", border:"none", color:C.muted, cursor:"pointer", fontSize:14 }}>✕</button>
+              </div>
+            ))}
+
+            {pipeline.length > 0 && (
+              <>
+                <div style={{ fontSize:11, color:C.dim }}>Input (starting text for the pipeline):</div>
+                <textarea rows={3} value={input} onChange={e=>setInput(e.target.value)} placeholder="Enter the text to process through the pipeline…"
+                  style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:6, color:C.text, fontSize:12, padding:"8px 10px", resize:"vertical" }} />
+                <button className="btn btn-primary" onClick={runPipeline} disabled={pipelineRunning || !input.trim() || pipeline.length===0}>
+                  {pipelineRunning ? <><Spinner /> Running pipeline…</> : `▶ Run ${pipeline.length} skill${pipeline.length!==1?"s":""}` }
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={()=>{ setPipeline([]); setPipelineResults([]); }}>Clear queue</button>
+              </>
+            )}
+
+            {pipelineResults.length > 0 && (
+              <div style={{ marginTop:8 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:C.dim, marginBottom:8, letterSpacing:1 }}>RESULTS</div>
+                {pipelineResults.map((r, i) => (
+                  <div key={i} style={{...S.resultCard, borderLeft:`3px solid ${r.error?C.red:C.accent}` }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:r.error?C.red:C.accent, marginBottom:6 }}>#{i+1} {r.skill}</div>
+                    <div style={{ fontSize:12, color:C.text, whiteSpace:"pre-wrap", maxHeight:200, overflowY:"auto" }}>{r.output}</div>
+                    {!r.error && (
+                      <div style={{ marginTop:6, display:"flex", gap:4 }}>
+                        <button onClick={()=>dlResult(r.output,"txt","text/plain")}
+                          style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ TXT</button>
+                        <button onClick={()=>dlResult(r.output,"md","text/markdown")}
+                          style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ MD</button>
+                        <button onClick={()=>dlResult(`<!DOCTYPE html><html><body>${r.output.replace(/\n/g,"<br>")}</body></html>`,"doc","application/msword")}
+                          style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:5, color:C.dim, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>↓ DOC</button>
+                      </div>
+                    )}
+                    {r.tokens && <div style={{ fontSize:10, color:C.dim, marginTop:4 }}>{r.tokens} tokens · {r.latency}ms</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────
 const NAV = [
   { id:"command",    icon:"◎", label:"Command Center", group:"main" },
@@ -2377,6 +2689,7 @@ const NAV = [
   { id:"skills",     icon:"◈", label:"Skills",          group:"main", countKey:"skills" },
   { id:"connectors", icon:"⌘", label:"Connectors",      group:"main", countKey:"connectors" },
   { id:"chat",       icon:"💬", label:"Chat",            group:"main" },
+  { id:"playground", icon:"⚡", label:"Playground",      group:"main" },
   { id:"runs",       icon:"▶", label:"Run History",     group:"data", countKey:"runs" },
   { id:"audit",      icon:"▦", label:"Audit Log",       group:"data" },
   { id:"database",   icon:"⬟", label:"Database",        group:"data" },
@@ -2459,7 +2772,7 @@ export default function App() {
             ))}
 
             <div className="nav-section">AI Providers</div>
-            {(["claude","gemini","openrouter","deepseek","openai","groq"]).map(key => {
+            {(["claude","gemini","zhipu","deepseek","openai","groq"]).map(key => {
               const p = PROVIDERS[key]; if (!p) return null;
               const isOn = providerStatus[key] ?? false;
               return (
@@ -2516,6 +2829,7 @@ export default function App() {
               {page==="database"  && <DatabasePage agents={agents} skills={skills} runs={runs} />}
               {page==="apikeys"   && <ApiKeysPage />}
               {page==="creator"   && <CreatorPage agents={agents} setAgents={setAgents} skills={skills} setSkills={setSkills} />}
+              {page==="playground"&& <PlaygroundPage skills={skills} />}
             </div>
           )}
 

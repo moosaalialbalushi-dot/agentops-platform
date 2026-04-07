@@ -320,6 +320,24 @@ async function callImagen(params: ProviderParams) {
   };
 }
 
+// ─── Zhipu AI (智谱AI / Z AI) — GLM models, OpenAI-compatible ───────────────
+// Get your key at: bigmodel.cn  |  Env var: ZHIPU_API_KEY
+
+async function callZhipu({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams) {
+  const apiKey = process.env.ZHIPU_API_KEY;
+  if (!apiKey) throw new Error("ZHIPU_API_KEY not set. Add it in Vercel → Settings → Environment Variables. Get a key at bigmodel.cn");
+
+  return callOpenAI({
+    model: model || "glm-4-flash",
+    system_prompt,
+    messages,
+    max_tokens,
+    temperature,
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    apiKey,
+  });
+}
+
 // ─── Provider Router ─────────────────────────────────────────────────────────
 
 async function callProvider(provider: string, params: ProviderParams) {
@@ -330,10 +348,11 @@ async function callProvider(provider: string, params: ProviderParams) {
     case "deepseek":    return callDeepSeek(params);
     case "groq":        return callGroq(params);
     case "openrouter":  return callOpenRouter(params);
+    case "zhipu":       return callZhipu(params);
     case "notebooklm":  return callNotebookLM(params);
     case "imagen":      return callImagen(params);
     case "veo":         return callVeo(params);
-    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, notebooklm, imagen, veo`);
+    default:            throw new Error(`Unknown provider: "${provider}". Supported: claude, gemini, openai, deepseek, groq, openrouter, zhipu, notebooklm, imagen, veo`);
   }
 }
 
