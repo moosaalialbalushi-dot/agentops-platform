@@ -1,8 +1,4 @@
-// ─── /api/pdf.ts ─────────────────────────────────────────────────────────────
-// Extracts text from a PDF or image using Gemini's multimodal capabilities.
-// Called by the client when a user uploads a PDF file in chat.
-// Requires: GEMINI_API_KEY environment variable.
-// ─────────────────────────────────────────────────────────────────────────────
+import { handleApiError, sendError, sendSuccess } from "../shared/api-utils";
 
 export const config = { maxDuration: 60 };
 
@@ -15,15 +11,12 @@ export default async function handler(req: any, res: any) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(400).json({
-      error: "PDF reading requires a GEMINI_API_KEY. Add it in Vercel → Settings → Environment Variables."
-    });
+    return sendError(res, "PDF reading requires a GEMINI_API_KEY. Add it in Vercel → Settings → Environment Variables.", 400);
   }
 
   const { file_data, mime_type, prompt } = req.body || {};
-  if (!file_data) return res.status(400).json({ error: "Missing file_data (base64 string)" });
+  if (!file_data) return sendError(res, "Missing file_data (base64 string)", 400);
 
-  // Strip the data: URL prefix if present
   const base64 = file_data.replace(/^data:[^;]+;base64,/, "");
   const fileMime = mime_type || "application/pdf";
 
@@ -52,8 +45,8 @@ export default async function handler(req: any, res: any) {
     const data = await r.json();
     if (!r.ok) throw new Error(data?.error?.message || `Gemini error ${r.status}`);
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    return res.status(200).json({ text, pages_detected: (text.match(/\n\n/g) || []).length });
+    return sendSuccess(res, { text, pages_detected: (text.match(/\n\n/g) || []).length });
   } catch (err: any) {
-    return res.status(502).json({ error: err.message });
+    return handleApiError(res, err);
   }
 }
