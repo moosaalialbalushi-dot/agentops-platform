@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { ChatMessage } from "@shared/ai-providers";
+import type { ChatMessage } from "@shared/ai-providers";
 import { db } from "./supabase";
 
 export function cn(...inputs: ClassValue[]) {
@@ -50,7 +50,17 @@ export async function routeToAI(agent: any, userMessage: string, history: any[] 
       fallback_model: agent.fallback_model || null,
     }),
   });
-  const data = await r.json();
+
+  let data: any;
+  const contentType = r.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    data = await r.json();
+  } else {
+    const text = await r.text();
+    console.error(`[AgentOps] Non-JSON response from ${AI_PROXY_URL}:`, text);
+    throw new Error(`Server returned non-JSON response (${r.status}). Check console for details.`);
+  }
+
   if (!r.ok) throw new Error(data?.error || `API error ${r.status}`);
   const { response, provider_used, model_used, fallback_triggered, latency_ms, tokens_used } = data;
   try {

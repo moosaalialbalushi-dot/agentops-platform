@@ -67,7 +67,14 @@ export function PlaygroundPage({ skills }: any) {
           max_tokens: maxTokens, temperature,
         }),
       });
-      const resData = await r.json();
+      let resData: any;
+      const contentType = r.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        resData = await r.json();
+      } else {
+        const text = await r.text();
+        throw new Error(`Non-JSON response from /api/chat: ${text.slice(0, 100)}`);
+      }
       if (!r.ok) throw new Error(resData?.error || `Error ${r.status}`);
       const data = resData.data || resData;
       const resp = data.response || "";
@@ -99,7 +106,14 @@ export function PlaygroundPage({ skills }: any) {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ skill_id: skill.id, input: currentInput }),
         });
-        const resData = await r.json();
+        let resData: any;
+        const contentType = r.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          resData = await r.json();
+        } else {
+          const text = await r.text();
+          throw new Error(`Non-JSON response from /api/pipeline: ${text.slice(0, 100)}`);
+        }
         if (!r.ok) throw new Error(resData?.error || `Error ${r.status}`);
         const data = resData.data || resData;
         const out = data.final_output || (data.steps && data.steps.slice(-1)[0]?.output) || "";

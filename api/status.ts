@@ -9,21 +9,21 @@ export default function handler(req: any, res: any) {
   if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
 
   const providers: Record<string, boolean> = {
-    claude:      !!process.env.ANTHROPIC_API_KEY,
-    gemini:      !!process.env.GEMINI_API_KEY,
-    openai:      !!process.env.OPENAI_API_KEY,
-    deepseek:    !!process.env.DEEPSEEK_API_KEY,
-    groq:        !!process.env.GROQ_API_KEY,
-    mistral:     !!process.env.MISTRAL_API_KEY,
-    cohere:      !!process.env.COHERE_API_KEY,
-    openrouter:  !!process.env.OPENROUTER_API_KEY,
-    zhipu:       !!process.env.ZHIPU_API_KEY,
-    notebooklm:  !!process.env.GEMINI_API_KEY,
-    imagen:      !!process.env.GEMINI_API_KEY,
-    veo:         !!process.env.GEMINI_API_KEY,
-    custom:      !!process.env.CUSTOM_API_KEY,
-    ernie_image: !!process.env.ERNIE_API_KEY,
-    chartgen:    !!process.env.ANTHROPIC_API_KEY,
+    claude:      !!(process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY),
+    gemini:      !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    openai:      !!(process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY),
+    deepseek:    !!(process.env.DEEPSEEK_API_KEY || process.env.VITE_DEEPSEEK_API_KEY),
+    groq:        !!(process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY),
+    mistral:     !!(process.env.MISTRAL_API_KEY || process.env.VITE_MISTRAL_API_KEY),
+    cohere:      !!(process.env.COHERE_API_KEY || process.env.VITE_COHERE_API_KEY),
+    openrouter:  !!(process.env.OPENROUTER_API_KEY || process.env.VITE_OPENROUTER_API_KEY),
+    zhipu:       !!(process.env.ZHIPU_API_KEY || process.env.VITE_ZHIPU_API_KEY),
+    notebooklm:  !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    imagen:      !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    veo:         !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    custom:      !!(process.env.CUSTOM_API_KEY || process.env.VITE_CUSTOM_API_KEY),
+    ernie_image: !!(process.env.ERNIE_API_KEY || process.env.VITE_ERNIE_API_KEY),
+    chartgen:    !!(process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY),
   };
 
   return sendSuccess(res, { providers });

@@ -26,10 +26,26 @@ export interface ProviderResponse {
   is_chart?: boolean;
 }
 
+// ─── Internal Env Helper ──────────────────────────────────────────────────────
+
+function getEnv(key: string): string | undefined {
+  // Try process.env first (for serverless/node)
+  if (typeof process !== "undefined" && process.env && process.env[key]) {
+    return process.env[key];
+  }
+  // Try Vite import.meta.env (for client-side/build)
+  const viteKey = `VITE_${key}`;
+  const env = (import.meta as any).env;
+  if (env) {
+    return env[viteKey] || env[key];
+  }
+  return undefined;
+}
+
 // ─── Provider Callers ────────────────────────────────────────────────────────
 
 export async function callClaude({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = getEnv("ANTHROPIC_API_KEY");
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
   const start = Date.now();
@@ -41,7 +57,7 @@ export async function callClaude({ model, system_prompt, messages, max_tokens, t
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: model || "claude-3-5-sonnet-20241022",
+      model: model || "claude-3-5-sonnet-latest",
       max_tokens: max_tokens || 1024,
       system: system_prompt || "You are a helpful AI agent.",
       temperature: temperature ?? 0.7,
@@ -60,7 +76,7 @@ export async function callClaude({ model, system_prompt, messages, max_tokens, t
 }
 
 export async function callGemini({ model, system_prompt, messages, max_tokens, temperature }: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getEnv("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
   const start = Date.now();
@@ -97,7 +113,7 @@ export async function callGemini({ model, system_prompt, messages, max_tokens, t
 }
 
 export async function callOpenAI({ model, system_prompt, messages, max_tokens, temperature, baseUrl, apiKey: customKey }: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = customKey || process.env.OPENAI_API_KEY;
+  const apiKey = customKey || getEnv("OPENAI_API_KEY");
   if (!apiKey) throw new Error(`${baseUrl ? 'API' : 'OPENAI_API'} key not set`);
 
   const start = Date.now();
@@ -129,7 +145,7 @@ export async function callOpenAI({ model, system_prompt, messages, max_tokens, t
 }
 
 export async function callDeepSeek(params: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = getEnv("DEEPSEEK_API_KEY");
   if (!apiKey) throw new Error("DEEPSEEK_API_KEY not set");
 
   return callOpenAI({
@@ -141,7 +157,7 @@ export async function callDeepSeek(params: ProviderParams): Promise<ProviderResp
 }
 
 export async function callGroq(params: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const apiKey = getEnv("GROQ_API_KEY");
   if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
   return callOpenAI({
@@ -153,19 +169,19 @@ export async function callGroq(params: ProviderParams): Promise<ProviderResponse
 }
 
 export async function callOpenRouter(params: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = getEnv("OPENROUTER_API_KEY");
   if (!apiKey) throw new Error("OPENROUTER_API_KEY not set");
 
   return callOpenAI({
     ...params,
-    model: params.model || "qwen/qwen-2.5-72b-instruct:free",
+    model: params.model || "google/gemini-flash-1.5-exp",
     baseUrl: "https://openrouter.ai/api",
     apiKey,
   });
 }
 
 export async function callZhipu(params: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.ZHIPU_API_KEY;
+  const apiKey = getEnv("ZHIPU_API_KEY");
   if (!apiKey) throw new Error("ZHIPU_API_KEY not set");
 
   return callOpenAI({
@@ -177,7 +193,7 @@ export async function callZhipu(params: ProviderParams): Promise<ProviderRespons
 }
 
 export async function callImageGenerator(params: ProviderParams, providerLabel: string, defaultModel: string): Promise<ProviderResponse> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getEnv("GEMINI_API_KEY");
   if (!apiKey) throw new Error(`GEMINI_API_KEY not set (required for ${providerLabel})`);
 
   const model = params.model || defaultModel;
@@ -219,7 +235,7 @@ export async function callNanoBanana(params: ProviderParams): Promise<ProviderRe
 export async function callErnieImage(params: ProviderParams): Promise<ProviderResponse> {
   // Ernie Image generation via a proxy or standard OpenAI-like wrapper if supported,
   // otherwise placeholder. For now, we simulate with a high-quality model or specific API.
-  const apiKey = process.env.ERNIE_API_KEY;
+  const apiKey = getEnv("ERNIE_API_KEY");
   if (!apiKey) throw new Error("ERNIE_API_KEY not set");
   // Simulating call to Ernie...
   return {
@@ -245,7 +261,7 @@ export async function callChartGen(params: ProviderParams): Promise<ProviderResp
 }
 
 export async function callVeo(params: ProviderParams): Promise<ProviderResponse> {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getEnv("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY not set (required for Veo)");
 
   const videoModel = params.model || "veo-2.0-generate-001";

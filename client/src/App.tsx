@@ -69,12 +69,19 @@ export default function App() {
 
     // Load provider status in background
     fetch("/api/status")
-      .then(r => r.json())
+      .then(async r => {
+        const contentType = r.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          return r.json();
+        }
+        const text = await r.text();
+        throw new Error(`Non-JSON response: ${text.slice(0, 100)}`);
+      })
       .then(d => {
         const statusData = d.data || d;
         if (statusData?.providers) setProviderStatus(statusData.providers);
       })
-      .catch(() => { });
+      .catch((err) => { console.error("[AgentOps] Failed to load provider status:", err); });
   };
 
   useEffect(() => { loadData(); }, []);

@@ -24,10 +24,18 @@ export function ApiKeysPage() {
     setChecking(true);
     try {
       const r = await fetch("/api/status");
-      const res = await r.json();
+      let res: any;
+      const contentType = r.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        res = await r.json();
+      } else {
+        const text = await r.text();
+        throw new Error(`Non-JSON response from /api/status: ${text.slice(0, 100)}`);
+      }
       const data = res.data || res;
       setStatus(data.providers || {});
-    } catch {
+    } catch (err) {
+      console.error("[AgentOps] Failed to check status:", err);
       setStatus({});
     } finally { setChecking(false); }
   };

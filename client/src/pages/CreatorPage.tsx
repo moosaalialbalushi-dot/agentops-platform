@@ -21,7 +21,7 @@ Ask ONE question at a time. Be concise and friendly. When you have enough inform
 
 Agent JSON schema:
 \`\`\`json
-{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-sonnet-4-6","fallback_provider":"gemini","fallback_model":"gemini-2.5-flash-preview-05-20","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
+{"type":"agent","name":"","persona":"researcher","primary_provider":"claude","primary_model":"claude-3-5-sonnet-latest","fallback_provider":"gemini","fallback_model":"gemini-1.5-flash","description":"","system_prompt":"","temperature":0.7,"max_tokens":4096}
 \`\`\`
 
 Skill JSON schema:
@@ -70,8 +70,8 @@ export function CreatorPage({ setAgents, setSkills }: CreatorPageProps) {
       { role: "user", content: userText }
     ];
     const attempts = [
-      { provider: "claude", model: "claude-sonnet-4-6" },
-      { provider: "gemini", model: "gemini-2.5-flash-preview-05-20" },
+      { provider: "claude", model: "claude-3-5-sonnet-latest" },
+      { provider: "gemini", model: "gemini-1.5-flash" },
       { provider: "zhipu", model: "glm-4-flash" },
     ];
     let responseText = "";
@@ -87,7 +87,16 @@ export function CreatorPage({ setAgents, setSkills }: CreatorPageProps) {
             max_tokens: 1200, temperature: 0.6,
           }),
         });
-        const data = await r.json();
+        let data: any;
+        const contentType = r.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          data = await r.json();
+        } else {
+          const text = await r.text();
+          console.error(`[AgentOps] Non-JSON response from /api/chat during creator attempt:`, text);
+          lastErr = `Server returned non-JSON (${r.status}).`;
+          continue;
+        }
         if (!r.ok) { lastErr = data?.error || `Error ${r.status}`; continue; }
         responseText = data.data?.response || data.response || "";
         break;
@@ -111,7 +120,7 @@ export function CreatorPage({ setAgents, setSkills }: CreatorPageProps) {
         const payload: Partial<Agent> = {
           name: preview.name, persona: preview.persona || "researcher",
           primary_provider: preview.primary_provider || "claude",
-          primary_model: preview.primary_model || "claude-sonnet-4-6",
+          primary_model: preview.primary_model || "claude-3-5-sonnet-latest",
           fallback_provider: preview.fallback_provider || null,
           fallback_model: preview.fallback_model || null,
           description: preview.description || "",

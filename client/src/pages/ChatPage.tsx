@@ -101,7 +101,14 @@ export function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conv
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ file_data: f.content, mime_type: f.type }),
             });
-            const res = await r.json();
+            let res: any;
+            const contentType = r.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+              res = await r.json();
+            } else {
+              const text = await r.text();
+              throw new Error(`Non-JSON response from /api/pdf: ${text.slice(0, 100)}`);
+            }
             const data = res.data || res;
             if (r.ok && data?.text) {
               parts.push(`--- PDF: ${f.name} ---\n${data.text}\n--- End of ${f.name} ---`);
@@ -157,7 +164,14 @@ export function ChatPage({ agent, agents, onSelectAgent, setAgents, skills, conv
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ steps, input: lastUserMsg, skill_name: skill.name }),
       });
-      const res = await r.json();
+      let res: any;
+      const contentType = r.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        res = await r.json();
+      } else {
+        const text = await r.text();
+        throw new Error(`Non-JSON response from /api/pipeline: ${text.slice(0, 100)}`);
+      }
       if (!r.ok) throw new Error(res?.error || `Pipeline error ${r.status}`);
       const data = res.data || res;
       setMsgs(m => m.map((msg, i) => i === placeholderIdx
