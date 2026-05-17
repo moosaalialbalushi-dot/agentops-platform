@@ -1,7 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase anon key is a publishable key — safe in client bundles.
-// Fallbacks ensure saves work even when VITE_ env vars are not set at Vercel build time.
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
   || "https://cnliqngeufcdsypuimog.supabase.co";
 
@@ -35,6 +33,7 @@ export interface Agent {
   total_tokens: number;
   created_at: string;
   updated_at: string;
+  skill_ids?: string[];
 }
 
 export interface Skill {
@@ -52,6 +51,8 @@ export interface Skill {
   tags: string[];
   created_at: string;
   updated_at: string;
+  output_type: "text" | "image" | "presentation" | "code" | "analysis" | "pipeline";
+  pipeline_steps?: any[];
 }
 
 export interface AgentRun {
@@ -73,6 +74,7 @@ export interface AgentRun {
 // ─── Data access helpers ──────────────────────────────────────
 
 export const db = {
+  supabase,
   agents: {
     list: () =>
       supabase.from("agents").select("*").order("created_at", { ascending: true }),

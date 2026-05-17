@@ -1,7 +1,4 @@
-// ─── /api/status.ts ───────────────────────────────────────────────────────────
-// Returns which AI provider environment variables are configured on the server.
-// No keys are returned — only a boolean presence check.
-// ─────────────────────────────────────────────────────────────────────────────
+import { sendSuccess } from "../shared/api-utils";
 
 export const config = { maxDuration: 5 };
 
@@ -21,11 +18,13 @@ export default function handler(req: any, res: any) {
     cohere:      !!process.env.COHERE_API_KEY,
     openrouter:  !!process.env.OPENROUTER_API_KEY,
     zhipu:       !!process.env.ZHIPU_API_KEY,
-    notebooklm:  !!process.env.GEMINI_API_KEY,  // uses Gemini key
-    imagen:      !!process.env.GEMINI_API_KEY,  // uses Gemini key
-    veo:         !!process.env.GEMINI_API_KEY,  // uses Gemini key
+    notebooklm:  !!process.env.GEMINI_API_KEY,
+    imagen:      !!process.env.GEMINI_API_KEY,
+    veo:         !!process.env.GEMINI_API_KEY,
     custom:      !!process.env.CUSTOM_API_KEY,
+    ernie_image: !!process.env.ERNIE_API_KEY,
+    chartgen:    !!process.env.ANTHROPIC_API_KEY,
   };
 
-  return res.status(200).json({ providers });
+  return sendSuccess(res, { providers });
 }
