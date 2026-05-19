@@ -34,24 +34,48 @@ export function SkillsPage({ skills, setSkills, loading }: SkillsPageProps) {
     setSaving(true);
     try {
       if (modal?.mode === "add") {
-        const { data: item } = await db.skills.create(d);
+        const { data: item, error } = await db.skills.create(d);
+        if (error) {
+          console.error("[AgentOps] Failed to create skill:", error);
+          alert("Failed to create skill: " + error.message);
+          return;
+        }
         if (item) setSkills(s => [...s, item]);
       } else if (d.id) {
-        const { data: item } = await db.skills.update(d.id, d);
+        const { data: item, error } = await db.skills.update(d.id, d);
+        if (error) {
+          console.error("[AgentOps] Failed to update skill:", error);
+          alert("Failed to update skill: " + error.message);
+          return;
+        }
         if (item) setSkills(s => s.map(x => x.id === d.id ? item : x));
       }
-    } finally { setSaving(false); setModal(null); }
+      setModal(null);
+    } catch (err: any) {
+      console.error("[AgentOps] Unexpected error saving skill:", err);
+      alert("Unexpected error: " + err.message);
+    } finally { setSaving(false); }
   };
 
   const toggleActive = async (skill: Skill) => {
     const updated = { ...skill, is_active: !skill.is_active };
-    await db.skills.update(skill.id, { is_active: updated.is_active });
+    const { error } = await db.skills.update(skill.id, { is_active: updated.is_active });
+    if (error) {
+      console.error("[AgentOps] Failed to toggle skill status:", error);
+      alert("Failed to update status: " + error.message);
+      return;
+    }
     setSkills(s => s.map(x => x.id === skill.id ? updated : x));
   };
 
   const doDelete = async () => {
     if (!del) return;
-    await db.skills.remove(del.id);
+    const { error } = await db.skills.remove(del.id);
+    if (error) {
+      console.error("[AgentOps] Failed to delete skill:", error);
+      alert("Failed to delete skill: " + error.message);
+      return;
+    }
     setSkills(s => s.filter(x => x.id !== del.id));
     setDel(null);
   };

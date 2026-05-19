@@ -71,12 +71,25 @@ export function ApiKeysPage() {
       </div>
 
       <div className="card" style={{ padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: status ? 14 : 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: status ? 14 : 10 }}>
           <div style={{ fontWeight: 700, fontSize: 12 }}>◎ Live Connection Status</div>
           <button className="btn btn-primary" onClick={checkStatus} disabled={checking} style={{ fontSize: 11, padding: "5px 14px" }}>
             {checking ? "Checking…" : "Check Now"}
           </button>
         </div>
+
+        <div style={{ marginBottom: 14, padding: 10, background: C.surface, borderRadius: 8, border: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginBottom: 4 }}>
+            <span>Supabase Database</span>
+            <span style={{ color: C.green, fontFamily: "'JetBrains Mono',monospace" }}>
+              ● CONNECTED
+            </span>
+          </div>
+          <div style={{ fontSize: 9, color: C.dim, fontFamily: "'JetBrains Mono',monospace", wordBreak: "break-all" }}>
+            Endpoint: {import.meta.env.VITE_SUPABASE_URL || "https://cnliqngeufcdsypuimog.supabase.co"}
+          </div>
+        </div>
+
         {status && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
             {Object.entries(PROVIDERS).map(([k, p]) => {

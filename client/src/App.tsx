@@ -45,6 +45,7 @@ export default function App() {
   const loadData = async () => {
     setLoading(true);
     try {
+      console.log("[AgentOps] Initializing Supabase connection...");
       const [a, s, r, cn, cv] = await Promise.all([
         db.agents.list(),
         db.skills.list(),
@@ -52,6 +53,12 @@ export default function App() {
         db.supabase.from("connectors").select("*").order("created_at", { ascending: true }),
         db.supabase.from("conversations").select("*").order("updated_at", { ascending: false }).limit(100),
       ]);
+
+      if (a.error) console.error("[AgentOps] Supabase agents fetch error:", a.error);
+      if (s.error) console.error("[AgentOps] Supabase skills fetch error:", s.error);
+      if (r.error) console.error("[AgentOps] Supabase runs fetch error:", r.error);
+      if (cn.error) console.error("[AgentOps] Supabase connectors fetch error:", cn.error);
+      if (cv.error) console.error("[AgentOps] Supabase conversations fetch error:", cv.error);
 
       const loadedAgents = a.data || [];
       setAgents(loadedAgents);

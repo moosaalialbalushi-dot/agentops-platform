@@ -130,7 +130,8 @@ export function CreatorPage({ setAgents, setSkills }: CreatorPageProps) {
           status: "active", provider_chain: [preview.primary_provider],
           total_runs: 0, total_tokens: 0,
         };
-        const { data: item } = await db.agents.create(payload);
+        const { data: item, error } = await db.agents.create(payload);
+        if (error) throw error;
         if (item) setAgents(p => [...p, item]);
       } else {
         const id = preview.identifier || preview.name?.toLowerCase().replace(/\s+/g, "_") || "skill_" + Date.now();
@@ -143,13 +144,17 @@ export function CreatorPage({ setAgents, setSkills }: CreatorPageProps) {
           is_active: true, permissions: "read", rate_limit: 100,
           tags: [], parameters: {},
         };
-        const { data: item } = await db.skills.create(payload);
+        const { data: item, error } = await db.skills.create(payload);
+        if (error) throw error;
         if (item) setSkills(p => [...p, item]);
       }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
       setPreview(null);
       setMsgs(m => [...m, { role: "agent", text: `✅ ${preview.type === "agent" ? "Agent" : "Skill"} **${preview.name}** has been saved! You can find it in the ${preview.type === "agent" ? "Agents" : "Skills"} page.\n\nWould you like to create another one?`, ts: new Date() }]);
+    } catch (err: any) {
+      console.error("[AgentOps] Failed to save created item:", err);
+      alert("Failed to save: " + err.message);
     } finally { setSaving(false); }
   };
 

@@ -26,7 +26,7 @@ export function AgentsPage({ agents, setAgents, skills, onChat, loading }: Agent
     name: "", persona: "researcher", description: "", status: "idle",
     primary_provider: "claude", fallback_provider: "gemini",
     provider_chain: ["claude", "gemini"],
-    primary_model: "claude-3-5-sonnet-20241022", fallback_model: "gemini-2.5-flash-preview-05-20",
+    primary_model: "claude-3-5-sonnet-latest", fallback_model: "gemini-1.5-flash",
     system_prompt: "You are a helpful AI agent. When asked to produce reports, analyses, or documents, output the complete final document in a single response — do not ask clarifying questions or provide partial drafts. Format output clearly with headings and sections.", temperature: 0.7, max_tokens: 4096,
     total_runs: 0, total_tokens: 0,
   };
@@ -36,18 +36,37 @@ export function AgentsPage({ agents, setAgents, skills, onChat, loading }: Agent
     setSaving(true);
     try {
       if (modal?.mode === "add") {
-        const { data: item } = await db.agents.create(d);
+        const { data: item, error } = await db.agents.create(d);
+        if (error) {
+          console.error("[AgentOps] Failed to create agent:", error);
+          alert("Failed to create agent: " + error.message);
+          return;
+        }
         if (item) setAgents(a => [...a, item]);
       } else if (d.id) {
-        const { data: item } = await db.agents.update(d.id, d);
+        const { data: item, error } = await db.agents.update(d.id, d);
+        if (error) {
+          console.error("[AgentOps] Failed to update agent:", error);
+          alert("Failed to update agent: " + error.message);
+          return;
+        }
         if (item) setAgents(a => a.map(x => x.id === d.id ? item : x));
       }
-    } finally { setSaving(false); setModal(null); }
+      setModal(null);
+    } catch (err: any) {
+      console.error("[AgentOps] Unexpected error saving agent:", err);
+      alert("Unexpected error: " + err.message);
+    } finally { setSaving(false); }
   };
 
   const doDelete = async () => {
     if (!del) return;
-    await db.agents.remove(del.id);
+    const { error } = await db.agents.remove(del.id);
+    if (error) {
+      console.error("[AgentOps] Failed to delete agent:", error);
+      alert("Failed to delete agent: " + error.message);
+      return;
+    }
     setAgents(a => a.filter(x => x.id !== del.id));
     setDel(null);
   };
